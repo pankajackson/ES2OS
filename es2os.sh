@@ -10,14 +10,18 @@ DATAVIEW_API_URL="$KB_HOST/api/data_views"
 ES_USER="elastic"
 ES_PASSWORD="PASS"
 DATAVIEW_API_INSECURE=true
-DATAVIEW_FILE="dataviews.json"
 IGNORE_SYSTEM_INDEXES=true
 
 OS_HOST="https://localhost:9200"
 OS_USER="admin"
 OS_PASSWORD="admin"
 
-REPORT_FILE="dataviews_migration_report.csv"
+# Define OUTPUT_DIR and create the directory if it doesn't exist
+OUTPUT_DIR="./output_files"
+mkdir -p "$OUTPUT_DIR"
+
+DATAVIEW_FILE="$OUTPUT_DIR/dataviews.json"
+REPORT_FILE="$OUTPUT_DIR/dataviews_migration_report.csv"
 
 # Determine curl flags based on DATAVIEW_API_INSECURE setting
 CURL_FLAGS=""
@@ -88,7 +92,8 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
     fi
 
     # Create a temporary Logstash configuration for the current data view
-    cat <<EOF >logstash_$TITLE.conf
+    CONFIG_FILE="$OUTPUT_DIR/logstash_$TITLE.conf"
+    cat <<EOF >"$CONFIG_FILE"
 input {
     elasticsearch {
         hosts => ["$ES_HOST"]
@@ -115,24 +120,23 @@ output {
         ssl_certificate_verification => false
         index => "%{[@metadata][doc][_index]}"
         document_id => "%{[@metadata][doc][_id]}"
-        # document_type => "%{[@metadata][doc][_type]}"
     }
 }
 EOF
 
-    echo "Logstash configuration for data view $NAME created as logstash_$TITLE.conf"
+    echo "Logstash configuration for data view $NAME created as $CONFIG_FILE"
 
     # Update report file status to "InProgress"
     update_report "$NAME" "InProgress"
 
     # Test the Logstash configuration
     echo "Testing Logstash configuration for $NAME..."
-    if sudo /usr/share/logstash/bin/logstash -f ./logstash_$TITLE.conf --config.test_and_exit; then
+    if sudo /usr/share/logstash/bin/logstash -f "$CONFIG_FILE" --config.test_and_exit; then
         echo "Logstash configuration for $NAME is valid."
 
-        # Run Logstash with the generated configuration
+# Run Logstash with the generated configuration
         echo "Running Logstash for data view $NAME..."
-        if sudo /usr/share/logstash/bin/logstash -f ./logstash_$TITLE.conf; then
+        if sudo /usr/share/logstash/bin/logstash -f "$CONFIG_FILE"; then
             echo "Data view $NAME processed successfully."
             update_report "$NAME" "Done"
         else
@@ -145,7 +149,7 @@ EOF
     fi
 
     # Optionally remove the temporary config file after processing
-    rm ./logstash_$TITLE.conf
+    rm "$CONFIG_FILE"
 done
 
 echo "All data views processed."
