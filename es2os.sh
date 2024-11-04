@@ -51,6 +51,15 @@ if [[ ! -f "$REPORT_FILE" ]]; then
     echo "Data View, Status" >"$REPORT_FILE"
 fi
 
+# Add all data views to the report with "UnProcessed" status
+jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
+    NAME=$(echo "$row" | jq -r '.name')
+    # Initialize the report with "UnProcessed" status if not already present
+    if ! grep -q "^$NAME," "$REPORT_FILE"; then
+        echo "$NAME, UnProcessed" >> "$REPORT_FILE"
+    fi
+done
+
 # Function to update or append status in the report file
 update_report() {
     local name=$1
