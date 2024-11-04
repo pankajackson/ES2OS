@@ -117,8 +117,8 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
 input {
     elasticsearch {
         hosts => ["$ES_ENDPOINT"]
-        user => "$ES_USERNAME"
-        password => "$ES_PASSWORD"
+        user => "\${ES_USERNAME}"
+        password => "\${ES_PASSWORD}"
         index => "$TITLE,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
         scroll => "5m"
@@ -133,8 +133,8 @@ output {
         hosts => ["$OS_ENDPOINT"]
         auth_type => {
             type => 'basic'
-            user => "$OS_USERNAME"
-            password => "$OS_PASSWORD"
+            user => "\${OS_USERNAME}"
+            password => "\${OS_PASSWORD}"
         }
         ssl => true
         ssl_certificate_verification => false
@@ -149,14 +149,20 @@ EOF
     # Update report file status to "InProgress"
     update_report "$NAME" "InProgress"
 
+    # Set environment variables for Logstash
+    export ES_USERNAME="$ES_USERNAME"
+    export ES_PASSWORD="$ES_PASSWORD"
+    export OS_USERNAME="$OS_USERNAME"
+    export OS_PASSWORD="$OS_PASSWORD"
+
     # Test the Logstash configuration
     echo "Testing Logstash configuration for $NAME..."
-    if sudo /usr/share/logstash/bin/logstash -f "$CONFIG_FILE" --config.test_and_exit; then
+    if sudo -E /usr/share/logstash/bin/logstash -f "$CONFIG_FILE" --config.test_and_exit; then
         echo "Logstash configuration for $NAME is valid."
 
         # Run Logstash with the generated configuration
         echo "Running Logstash for data view $NAME..."
-        if sudo /usr/share/logstash/bin/logstash -f "$CONFIG_FILE"; then
+        if sudo -E /usr/share/logstash/bin/logstash -f "$CONFIG_FILE"; then
             echo "Data view $NAME processed successfully."
             update_report "$NAME" "Done"
         else
