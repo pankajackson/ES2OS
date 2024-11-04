@@ -25,6 +25,11 @@ mkdir -p "$OUTPUT_DIR"
 
 DATAVIEW_FILE="$OUTPUT_DIR/dataviews.json"
 REPORT_FILE="$OUTPUT_DIR/dataviews_migration_report.csv"
+LOGSTASH_CONF_DIR="$OUTPUT_DIR/ls_confs"
+mkdir -p "$LOGSTASH_CONF_DIR"
+
+# Boolean variable to control config cleanup
+CONFIG_CLEANUP=false # Change to false if you want to skip cleanup
 
 # Determine curl flags based on DATAVIEW_API_INSECURE setting
 CURL_FLAGS=""
@@ -56,7 +61,7 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
     NAME=$(echo "$row" | jq -r '.name')
     # Initialize the report with "UnProcessed" status if not already present
     if ! grep -q "^$NAME," "$REPORT_FILE"; then
-        echo "$NAME, UnProcessed" >> "$REPORT_FILE"
+        echo "$NAME, UnProcessed" >>"$REPORT_FILE"
     fi
 done
 
@@ -103,8 +108,11 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         continue
     fi
 
+    # Sanitize TITLE to remove special characters for the filename
+    # SANITIZED_TITLE=$(echo "$TITLE" | tr -cd '[:alnum:]_.-') # Allow alphanumeric, underscore, dot, and hyphen
+    SANITIZED_TITLE=$(echo "$TITLE" | tr -cd '[:alnum:]') # Allow alphanumeric
     # Create a temporary Logstash configuration for the current data view
-    CONFIG_FILE="$OUTPUT_DIR/logstash_$TITLE.conf"
+    CONFIG_FILE="$LOGSTASH_CONF_DIR/logstash_$SANITIZED_TITLE.conf"
     cat <<EOF >"$CONFIG_FILE"
 input {
     elasticsearch {
@@ -160,8 +168,10 @@ EOF
         update_report "$NAME" "Failed"
     fi
 
-    # Optionally remove the temporary config file after processing
-    rm "$CONFIG_FILE"
+    # Optionally remove the temporary config file after processing based on CONFIG_CLEANUP
+    if [ "$CONFIG_CLEANUP" = true ]; then
+        rm "$CONFIG_FILE"
+    fi
 done
 
 echo "All data views processed."
