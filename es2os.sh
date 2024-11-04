@@ -7,16 +7,17 @@ set -e
 ES_HOST="https://es.evega.co.in"
 KB_HOST="https://kb.jackson.com"
 DATAVIEW_API_URL="$KB_HOST/api/data_views"
-ES_USER="elastic"             # Used for both Elasticsearch and API authentication
+ES_USER="elastic"
 ES_PASSWORD="PASS"
-DATAVIEW_API_INSECURE=true     # Set to true to add --insecure flag in curl command
+DATAVIEW_API_INSECURE=true
+DATAVIEW_FILE="dataviews.json"
+IGNORE_SYSTEM_INDEXES=true
 
 OS_HOST="https://localhost:9200"
 OS_USER="admin"
-OS_PASSWORD="PASS"
-DATAVIEW_FILE="dataviews.json"
-REPORT_FILE="dataviews_migration_report.txt"
-IGNORE_SYSTEM_INDEXES=true      # Set to true to ignore system indices (starting with '.')
+OS_PASSWORD="admin"
+
+REPORT_FILE="dataviews_migration_report.csv"
 
 # Determine curl flags based on DATAVIEW_API_INSECURE setting
 CURL_FLAGS=""
@@ -40,7 +41,7 @@ cat "$DATAVIEW_FILE"
 
 # Initialize the report file if it doesn't exist
 if [[ ! -f "$REPORT_FILE" ]]; then
-    echo "Data View, Status" > "$REPORT_FILE"
+    echo "Data View, Status" >"$REPORT_FILE"
 fi
 
 # Function to update or append status in the report file
@@ -52,7 +53,7 @@ update_report() {
         sed -i "s/^$name,.*/$name, $status/" "$REPORT_FILE"
     else
         # Append new entry
-        echo "$name, $status" >> "$REPORT_FILE"
+        echo "$name, $status" >>"$REPORT_FILE"
     fi
 }
 
@@ -87,7 +88,7 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
     fi
 
     # Create a temporary Logstash configuration for the current data view
-    cat <<EOF > logstash_$TITLE.conf
+    cat <<EOF >logstash_$TITLE.conf
 input {
     elasticsearch {
         hosts => ["$ES_HOST"]
@@ -128,7 +129,7 @@ EOF
     echo "Testing Logstash configuration for $NAME..."
     if sudo /usr/share/logstash/bin/logstash -f ./logstash_$TITLE.conf --config.test_and_exit; then
         echo "Logstash configuration for $NAME is valid."
-        
+
         # Run Logstash with the generated configuration
         echo "Running Logstash for data view $NAME..."
         if sudo /usr/share/logstash/bin/logstash -f ./logstash_$TITLE.conf; then
