@@ -3,18 +3,21 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# Define variables
-ES_HOST="https://es.evega.co.in"
-KB_HOST="https://kb.jackson.com"
-DATAVIEW_API_URL="$KB_HOST/api/data_views"
-ES_USER="elastic"
-ES_PASSWORD="PASS"
-DATAVIEW_API_INSECURE=true
-IGNORE_SYSTEM_INDEXES=true
+# Load environment variables from env.sh, if available
+if [ -f "./env.sh" ]; then
+    source ./env.sh
+fi
 
-OS_HOST="https://localhost:9200"
-OS_USER="admin"
-OS_PASSWORD="admin"
+# Define default values from environment variable
+ES_ENDPOINT="${ES_HOST:-https://es.evega.co.in}"
+KB_ENDPOINT="${KB_HOST:-https://kb.jackson.com}"
+ES_USERNAME="${ES_USER:-elastic}"
+ES_PASSWORD="${ES_PASS:-default_elastic_password}"
+DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
+
+OS_ENDPOINT="${OS_HOST:-https://localhost:9200}"
+OS_USERNAME="${OS_USER:-admin}"
+OS_PASSWORD="${OS_PASS:-default_admin_password}"
 
 # Define OUTPUT_DIR and create the directory if it doesn't exist
 OUTPUT_DIR="./output_files"
@@ -30,8 +33,8 @@ if [ "$DATAVIEW_API_INSECURE" = true ]; then
 fi
 
 # Fetch data view list from API and save to file
-echo "Fetching data views from $DATAVIEW_API_URL..."
-curl -s $CURL_FLAGS -u "$ES_USER:$ES_PASSWORD" "$DATAVIEW_API_URL" -o "$DATAVIEW_FILE"
+echo "Fetching data views from $KB_ENDPOINT..."
+curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/data_views" -o "$DATAVIEW_FILE"
 
 # Check if data view file was created and is not empty
 if [[ ! -s "$DATAVIEW_FILE" ]]; then
@@ -85,7 +88,7 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
     echo "Processing data view: $NAME (Title: $TITLE)"
 
     # Check if the index exists
-    if ! curl -s $CURL_FLAGS -u "$ES_USER:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_HOST/_cat/indices/$TITLE" | grep -q "200"; then
+    if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$TITLE" | grep -q "200"; then
         echo "Index $TITLE does not exist. Skipping this data view."
         update_report "$NAME" "Skipped"
         continue
@@ -96,8 +99,8 @@ jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
     cat <<EOF >"$CONFIG_FILE"
 input {
     elasticsearch {
-        hosts => ["$ES_HOST"]
-        user => "$ES_USER"
+        hosts => ["$ES_ENDPOINT"]
+        user => "$ES_USERNAME"
         password => "$ES_PASSWORD"
         index => "$TITLE,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
@@ -110,10 +113,10 @@ input {
 
 output {
     opensearch {
-        hosts => ["$OS_HOST"]
+        hosts => ["$OS_ENDPOINT"]
         auth_type => {
             type => 'basic'
-            user => "$OS_USER"
+            user => "$OS_USERNAME"
             password => "$OS_PASSWORD"
         }
         ssl => true
@@ -134,7 +137,7 @@ EOF
     if sudo /usr/share/logstash/bin/logstash -f "$CONFIG_FILE" --config.test_and_exit; then
         echo "Logstash configuration for $NAME is valid."
 
-# Run Logstash with the generated configuration
+        # Run Logstash with the generated configuration
         echo "Running Logstash for data view $NAME..."
         if sudo /usr/share/logstash/bin/logstash -f "$CONFIG_FILE"; then
             echo "Data view $NAME processed successfully."
