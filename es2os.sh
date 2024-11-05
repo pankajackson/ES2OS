@@ -40,6 +40,11 @@ setup_variables() {
     fi
 }
 
+# Sanitize name to remove special characters
+sanitize_name() {
+    echo "$1" | tr -cd '[:alnum:]'
+}
+
 # Fetch data views from API and save to file
 fetch_dataviews() {
     echo "Fetching data views from $KB_ENDPOINT..."
@@ -66,7 +71,7 @@ generate_initial_report() {
     # Add all data views to the report with "UnProcessed" status
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         name=$(echo "$row" | jq -r '.name')
-        local sanitized_name=$(echo "$name" | tr -cd '[:alnum:]')
+        sanitized_name=$(sanitize_name "$name")
         if ! grep -q "^$sanitized_name," "$REPORT_FILE"; then
             echo "$sanitized_name, UnProcessed" >>"$REPORT_FILE"
         fi
@@ -77,7 +82,7 @@ generate_initial_report() {
 update_report() {
     local name=$1
     local status=$2
-    local sanitized_name=$(echo "$name" | tr -cd '[:alnum:]')
+    local sanitized_name=$(sanitize_name "$name")
     if grep -q "^$sanitized_name," "$REPORT_FILE"; then
         sed -i "s/^$sanitized_name,.*/$sanitized_name, $status/" "$REPORT_FILE"
     else
@@ -89,7 +94,7 @@ update_report() {
 verify_dataview() {
     local title=$1
     local name=$2
-    local sanitized_name=$(echo "$name" | tr -cd '[:alnum:]')
+    local sanitized_name=$(sanitize_name "$name")
 
     # Check the report file for the current data view's status
     local status=$(grep -E "^$sanitized_name," "$REPORT_FILE" | cut -d ',' -f2 | tr -d ' ')
@@ -123,9 +128,9 @@ process_dataview() {
     local name=$2
 
     echo "Processing data view: $name (Title: $title)"
-
+    
     # Sanitize title for the config filename
-    local sanitized_title=$(echo "$title" | tr -cd '[:alnum:]')
+    local sanitized_title=$(sanitize_name "$title")
     local config_file="$LOGSTASH_CONF_DIR/logstash_$sanitized_title.conf"
 
     # Generate Logstash configuration for the current data view
