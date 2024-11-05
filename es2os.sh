@@ -42,6 +42,7 @@ setup_variables() {
     ES_USERNAME="${ES_USER:-elastic}"
     ES_PASSWORD="${ES_PASS:-default_elastic_password}"
     ES_SSL="${ES_SSL:-true}"
+    ES_CA_FILE="${ES_CA_FILE:-}"
     DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
 
     OS_ENDPOINT="${OS_HOST:-https://os.la.local:9200}"
@@ -181,7 +182,18 @@ input {
         size => 2000
         docinfo => true
         docinfo_target => "[@metadata][doc]"
-    }
+EOF
+
+    # Add ca_file only if ES_CA_FILE is set
+    if [ -n "$ES_CA_FILE" ]; then
+        echo "        ca_file => \"$ES_CA_FILE\"" >>"$config_file"
+    fi
+
+    # Close the input section
+    echo "    }" >>"$config_file"
+
+    # Continue with the rest of the configuration
+    cat <<EOF >>"$config_file"
 }
 
 output {

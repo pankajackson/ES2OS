@@ -5,6 +5,7 @@ KB_HOST="https://kb.la.local:5601"
 ES_USER="elastic"
 ES_PASS="elastic"
 ES_SSL=true
+# ES_CA_FILE="/home/jackson/empty-ca.pem"
 DATAVIEW_API_INSECURE=true
 
 OS_HOST="https://os.la.local:9200"
