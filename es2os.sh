@@ -97,8 +97,8 @@ update_report() {
 # Verify if the data view should be processed or skipped
 verify_dataview() {
     local id=$1
-    local title=$2
-    local name=$3
+    local name=$2
+    local title=$3
 
     # Check the report file for the current data view's status
     local status=$(grep -E "^$id," "$REPORT_FILE" | cut -d ',' -f4 | tr -d ' ')
@@ -129,8 +129,8 @@ verify_dataview() {
 # Process individual data view with Logstash
 process_dataview() {
     local id=$1
-    local title=$2
-    local name=$3
+    local name=$2
+    local title=$3
 
     echo "Processing data view: $name (Index Pattern: $title)"
 
@@ -218,8 +218,8 @@ main() {
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
 
-        if verify_dataview "$id" "$title" "$name"; then
-            process_dataview "$id" "$title" "$name"
+        if verify_dataview "$id" "$name" "$title"; then
+            process_dataview "$id" "$name" "$title"
         fi
     done
 
