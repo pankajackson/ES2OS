@@ -78,8 +78,8 @@ This script allows you to set environment-specific values in an optional `env.sh
 
 To set up environment-specific values, create an `env.sh` file in the root directory with the following variables:
 
-- **`ES_HOST`**: Elasticsearch host (default: `https://es.la.local`)
-- **`KB_HOST`**: Kibana host (default: `https://kb.la.local`)
+- **`ES_HOST`**: Elasticsearch host (default: `https://es.la.local:9200`)
+- **`KB_HOST`**: Kibana host (default: `https://kb.la.local:5601`)
 - **`ES_USER`**: Elasticsearch username (default: `elastic`)
 - **`ES_PASS`**: Elasticsearch password (default: `default_elastic_password`)
 - **`DATAVIEW_API_INSECURE`**: Set to `true` to disable SSL verification for API requests (default: `true`)
@@ -90,12 +90,12 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 ### Example `env.sh`:
 
 ```bash
-ES_HOST="https://your-elasticsearch-host"
-KB_HOST="https://your-kibana-host"
+ES_HOST="https://your-elasticsearch-host:9200"
+KB_HOST="https://your-kibana-host:5601"
 ES_USER="your_es_username"
 ES_PASS="your_es_password"
 DATAVIEW_API_INSECURE=true
-OS_HOST="https://your-opensearch-host"
+OS_HOST="https://your-opensearch-host:9200"
 OS_USER="your_os_username"
 OS_PASS="your_os_password"
 ```
@@ -116,6 +116,7 @@ OS_PASS="your_os_password"
 ## Notes
 
 - Ensure `jq` and `curl` are installed before running the script.
+- Ensure that all host URLs in the env.sh file include the protocol (http:// or https://) and port (:9200, :443, or :5601), along with the hostname.
 - Run `./es2os.sh setup` before running the migration to install required applications.
 - To modify the cleanup behavior, set `CONFIG_CLEANUP` to `true` or `false` within the script.
 

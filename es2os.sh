@@ -37,15 +37,18 @@ setup_variables() {
     fi
 
     # Define default values for environment variables
-    ES_ENDPOINT="${ES_HOST:-https://es.ls.local}"
-    KB_ENDPOINT="${KB_HOST:-https://kb.ls.local}"
+    ES_ENDPOINT="${ES_HOST:-https://es.la.local:9200}"
+    KB_ENDPOINT="${KB_HOST:-https://kb.la.local:5601}"
     ES_USERNAME="${ES_USER:-elastic}"
     ES_PASSWORD="${ES_PASS:-default_elastic_password}"
+    ES_SSL="${ES_SSL:-true}"
     DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
 
-    OS_ENDPOINT="${OS_HOST:-https://os.ls.local:9200}"
+    OS_ENDPOINT="${OS_HOST:-https://os.la.local:9200}"
     OS_USERNAME="${OS_USER:-admin}"
     OS_PASSWORD="${OS_PASS:-default_admin_password}"
+    OS_SSL="${OS_SSL:-true}"
+    OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
     # Define output directory and create it if it doesn't exist
     OUTPUT_DIR="./output_files"
@@ -168,8 +171,9 @@ process_dataview() {
     cat <<EOF >"$config_file"
 input {
     elasticsearch {
-        hosts => ["$ES_ENDPOINT"]
+        hosts => ["${ES_ENDPOINT#https://}"]
         user => "\${ES_USERNAME}"
+        ssl => $ES_SSL
         password => "\${ES_PASSWORD}"
         index => "$title,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
@@ -188,8 +192,8 @@ output {
             user => "\${OS_USERNAME}"
             password => "\${OS_PASSWORD}"
         }
-        ssl => true
-        ssl_certificate_verification => false
+        ssl => $OS_SSL
+        ssl_certificate_verification => $OS_SSL_CERT_VERIFY
         index => "%{[@metadata][doc][_index]}"
         document_id => "%{[@metadata][doc][_id]}"
     }
