@@ -65,39 +65,46 @@ fetch_dataviews() {
 generate_initial_report() {
     # Initialize the report file if it doesn't exist
     if [[ ! -f "$REPORT_FILE" ]]; then
-        echo "Data View, Status" >"$REPORT_FILE"
+        echo "id, Data View, Index Pattern, Status" >"$REPORT_FILE"
     fi
 
     # Add all data views to the report with "UnProcessed" status
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
+        id=$(echo "$row" | jq -r '.id')
         name=$(echo "$row" | jq -r '.name')
         sanitized_name=$(sanitize_name "$name")
-        if ! grep -q "^$sanitized_name," "$REPORT_FILE"; then
-            echo "$sanitized_name, UnProcessed" >>"$REPORT_FILE"
+        title=$(echo "$row" | jq -r '.title')
+
+        if ! grep -q "^$id," "$REPORT_FILE"; then
+            echo "$id, $sanitized_name, $title, UnProcessed" >>"$REPORT_FILE"
         fi
     done
 }
 
 # Update or append status in the report file
 update_report() {
-    local name=$1
-    local status=$2
+    local id=$1
+    local name=$2
+    local index_pattern=$3
+    local status=$4
     local sanitized_name=$(sanitize_name "$name")
-    if grep -q "^$sanitized_name," "$REPORT_FILE"; then
-        sed -i "s/^$sanitized_name,.*/$sanitized_name, $status/" "$REPORT_FILE"
+
+    if grep -q "^$id," "$REPORT_FILE"; then
+        sed -i "s/^$id,.*/$id, $sanitized_name, $index_pattern, $status/" "$REPORT_FILE"
     else
-        echo "$sanitized_name, $status" >>"$REPORT_FILE"
+        echo "$id, $sanitized_name, $index_pattern, $status" >>"$REPORT_FILE"
     fi
 }
 
 # Verify if the data view should be processed or skipped
 verify_dataview() {
-    local title=$1
-    local name=$2
+    local id=$1
+    local title=$2
+    local name=$3
     local sanitized_name=$(sanitize_name "$name")
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$sanitized_name," "$REPORT_FILE" | cut -d ',' -f2 | tr -d ' ')
+    local status=$(grep -E "^$id," "$REPORT_FILE" | cut -d ',' -f4 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
@@ -108,14 +115,14 @@ verify_dataview() {
     # Skip system indexes if configured to do so
     if [[ "$IGNORE_SYSTEM_INDEXES" = true && "$title" == .* ]]; then
         echo "Ignoring system index: $title"
-        update_report "$name" "Skipped"
+        update_report "$id" "$name" "$title" "Skipped"
         return 1
     fi
 
     # Check if the index exists
     if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$title" | grep -q "200"; then
         echo "Index $title does not exist. Skipping this data view."
-        update_report "$name" "Skipped"
+        update_report "$id" "$name" "$title" "Skipped"
         return 1
     fi
 
@@ -124,11 +131,12 @@ verify_dataview() {
 
 # Process individual data view with Logstash
 process_dataview() {
-    local title=$1
-    local name=$2
+    local id=$1
+    local title=$2
+    local name=$3
 
-    echo "Processing data view: $name (Title: $title)"
-    
+    echo "Processing data view: $name (Index Pattern: $title)"
+
     # Sanitize title for the config filename
     local sanitized_title=$(sanitize_name "$title")
     local config_file="$LOGSTASH_CONF_DIR/logstash_$sanitized_title.conf"
@@ -168,7 +176,7 @@ EOF
     echo "Logstash configuration for data view $name created as $config_file"
 
     # Update report file status to "InProgress"
-    update_report "$name" "InProgress"
+    update_report "$id" "$name" "$title" "InProgress"
 
     # Set environment variables for Logstash
     export ES_USERNAME="$ES_USERNAME"
@@ -185,14 +193,14 @@ EOF
         echo "Running Logstash for data view $name..."
         if sudo -E /usr/share/logstash/bin/logstash -f "$config_file"; then
             echo "Data view $name processed successfully."
-            update_report "$name" "Done"
+            update_report "$id" "$name" "$title" "Done"
         else
             echo "Failed to process data view $name."
-            update_report "$name" "Failed"
+            update_report "$id" "$name" "$title" "Failed"
         fi
     else
         echo "Logstash configuration for $name is invalid."
-        update_report "$name" "Failed"
+        update_report "$id" "$name" "$title" "Failed"
     fi
 
     # Remove config if CONFIG_CLEANUP is true
@@ -209,11 +217,12 @@ main() {
 
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
+        local id=$(echo "$row" | jq -r '.id')
         local title=$(echo "$row" | jq -r '.title')
         local name=$(echo "$row" | jq -r '.name')
 
-        if verify_dataview "$title" "$name"; then
-            process_dataview "$title" "$name"
+        if verify_dataview "$id" "$title" "$name"; then
+            process_dataview "$id" "$title" "$name"
         fi
     done
 
