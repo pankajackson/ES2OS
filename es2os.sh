@@ -31,24 +31,33 @@ setup() {
 
 # Load environment variables and set defaults
 setup_variables() {
-    # Load environment variables from env.sh, if available
-    if [ -f "./env.sh" ]; then
-        source ./env.sh
+    local env_file_path="${1:-./env.sh}"
+
+    # Load environment variables from the specified env.sh path, if available
+    if [ -f "$env_file_path" ]; then
+        echo "Loading environment variables from $env_file_path..."
+        source "$env_file_path"
+    else
+        echo "Warning: Environment file $env_file_path not found. Using default values."
     fi
 
     # Define default values for environment variables
-    ES_ENDPOINT="${ES_HOST:-https://es.ls.local}"
-    KB_ENDPOINT="${KB_HOST:-https://kb.ls.local}"
+    ES_ENDPOINT="${ES_HOST:-https://es.la.local:9200}"
+    KB_ENDPOINT="${KB_HOST:-https://kb.la.local:5601}"
     ES_USERNAME="${ES_USER:-elastic}"
     ES_PASSWORD="${ES_PASS:-default_elastic_password}"
+    ES_SSL="${ES_SSL:-true}"
+    ES_CA_FILE="${ES_CA_FILE:-}"
     DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
 
-    OS_ENDPOINT="${OS_HOST:-https://os.ls.local:9200}"
+    OS_ENDPOINT="${OS_HOST:-https://os.la.local:9200}"
     OS_USERNAME="${OS_USER:-admin}"
     OS_PASSWORD="${OS_PASS:-default_admin_password}"
+    OS_SSL="${OS_SSL:-true}"
+    OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
     # Define output directory and create it if it doesn't exist
-    OUTPUT_DIR="./output_files"
+    OUTPUT_DIR="${OUTPUT_DIR:-./output_files}"
     mkdir -p "$OUTPUT_DIR"
 
     DATAVIEW_FILE="$OUTPUT_DIR/dataviews.json"
@@ -57,7 +66,10 @@ setup_variables() {
     mkdir -p "$LOGSTASH_CONF_DIR"
 
     # Control config cleanup
-    CONFIG_CLEANUP=false
+    CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
+
+    # Set DEBUG to false by default
+    DEBUG="${DEBUG:-false}"
 
     # Determine curl flags based on DATAVIEW_API_INSECURE setting
     CURL_FLAGS=""
@@ -168,8 +180,9 @@ process_dataview() {
     cat <<EOF >"$config_file"
 input {
     elasticsearch {
-        hosts => ["$ES_ENDPOINT"]
+        hosts => ["${ES_ENDPOINT#https://}"]
         user => "\${ES_USERNAME}"
+        ssl => $ES_SSL
         password => "\${ES_PASSWORD}"
         index => "$title,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
@@ -177,10 +190,27 @@ input {
         size => 2000
         docinfo => true
         docinfo_target => "[@metadata][doc]"
+EOF
+
+    # Add ca_file only if ES_CA_FILE is set
+    if [ -n "$ES_CA_FILE" ]; then
+        echo "        ca_file => \"$ES_CA_FILE\"" >>"$config_file"
+    fi
+
+    # Close the input and start output section
+    cat <<EOF >>"$config_file"
     }
 }
-
 output {
+EOF
+
+    # Add stdout output if DEBUG is true
+    if [ "$DEBUG" = true ]; then
+        echo "    stdout { codec => json }" >>"$config_file"
+    fi
+
+    # Continue with the standard output section
+    cat <<EOF >>"$config_file"
     opensearch {
         hosts => ["$OS_ENDPOINT"]
         auth_type => {
@@ -188,8 +218,8 @@ output {
             user => "\${OS_USERNAME}"
             password => "\${OS_PASSWORD}"
         }
-        ssl => true
-        ssl_certificate_verification => false
+        ssl => $OS_SSL
+        ssl_certificate_verification => $OS_SSL_CERT_VERIFY
         index => "%{[@metadata][doc][_index]}"
         document_id => "%{[@metadata][doc][_id]}"
     }
@@ -239,7 +269,10 @@ main() {
         exit 0
     fi
 
-    setup_variables
+    # Pass custom env.sh path if provided
+    local env_file_path="${1:-./env.sh}"
+    setup_variables "$env_file_path"
+
     fetch_dataviews
     generate_initial_report
 
