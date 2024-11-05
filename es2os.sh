@@ -65,9 +65,10 @@ generate_initial_report() {
 
     # Add all data views to the report with "UnProcessed" status
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
-        NAME=$(echo "$row" | jq -r '.name')
-        if ! grep -q "^$NAME," "$REPORT_FILE"; then
-            echo "$NAME, UnProcessed" >>"$REPORT_FILE"
+        name=$(echo "$row" | jq -r '.name')
+        local sanitized_name=$(echo "$name" | tr -cd '[:alnum:]')
+        if ! grep -q "^$sanitized_name," "$REPORT_FILE"; then
+            echo "$sanitized_name, UnProcessed" >>"$REPORT_FILE"
         fi
     done
 }
@@ -76,10 +77,11 @@ generate_initial_report() {
 update_report() {
     local name=$1
     local status=$2
-    if grep -q "^$name," "$REPORT_FILE"; then
-        sed -i "s/^$name,.*/$name, $status/" "$REPORT_FILE"
+    local sanitized_name=$(echo "$name" | tr -cd '[:alnum:]')
+    if grep -q "^$sanitized_name," "$REPORT_FILE"; then
+        sed -i "s/^$sanitized_name,.*/$sanitized_name, $status/" "$REPORT_FILE"
     else
-        echo "$name, $status" >>"$REPORT_FILE"
+        echo "$sanitized_name, $status" >>"$REPORT_FILE"
     fi
 }
 
@@ -87,9 +89,10 @@ update_report() {
 verify_dataview() {
     local title=$1
     local name=$2
+    local sanitized_name=$(echo "$name" | tr -cd '[:alnum:]')
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$name," "$REPORT_FILE" | cut -d ',' -f2 | tr -d ' ')
+    local status=$(grep -E "^$sanitized_name," "$REPORT_FILE" | cut -d ',' -f2 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
