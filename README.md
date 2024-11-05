@@ -41,8 +41,8 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
 1. **Clone the Repository**:
 
    ```bash
-   git clone https://github.com/yourusername/data-view-migration.git
-   cd data-view-migration
+   git clone https://github.com/pankajackson/ES2OS.git
+   cd ES2OS
    ```
 
 2. **Run Setup: To install dependencies and set up the environment, use:**:
