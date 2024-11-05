@@ -72,11 +72,10 @@ generate_initial_report() {
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         name=$(echo "$row" | jq -r '.name')
-        sanitized_name=$(sanitize_name "$name")
         title=$(echo "$row" | jq -r '.title')
 
         if ! grep -q "^$id," "$REPORT_FILE"; then
-            echo "$id, $sanitized_name, $title, UnProcessed" >>"$REPORT_FILE"
+            echo "$id, $name, $title, UnProcessed" >>"$REPORT_FILE"
         fi
     done
 }
@@ -87,12 +86,11 @@ update_report() {
     local name=$2
     local index_pattern=$3
     local status=$4
-    local sanitized_name=$(sanitize_name "$name")
 
     if grep -q "^$id," "$REPORT_FILE"; then
-        sed -i "s/^$id,.*/$id, $sanitized_name, $index_pattern, $status/" "$REPORT_FILE"
+        sed -i "s/^$id,.*/$id, $name, $index_pattern, $status/" "$REPORT_FILE"
     else
-        echo "$id, $sanitized_name, $index_pattern, $status" >>"$REPORT_FILE"
+        echo "$id, $name, $index_pattern, $status" >>"$REPORT_FILE"
     fi
 }
 
@@ -101,7 +99,6 @@ verify_dataview() {
     local id=$1
     local title=$2
     local name=$3
-    local sanitized_name=$(sanitize_name "$name")
 
     # Check the report file for the current data view's status
     local status=$(grep -E "^$id," "$REPORT_FILE" | cut -d ',' -f4 | tr -d ' ')
@@ -217,9 +214,9 @@ main() {
 
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
-        local id=$(echo "$row" | jq -r '.id')
-        local title=$(echo "$row" | jq -r '.title')
-        local name=$(echo "$row" | jq -r '.name')
+        id=$(echo "$row" | jq -r '.id')
+        title=$(echo "$row" | jq -r '.title')
+        name=$(echo "$row" | jq -r '.name')
 
         if verify_dataview "$id" "$title" "$name"; then
             process_dataview "$id" "$title" "$name"
