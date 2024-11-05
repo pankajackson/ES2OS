@@ -37,13 +37,13 @@ setup_variables() {
     fi
 
     # Define default values for environment variables
-    ES_ENDPOINT="${ES_HOST:-https://es.evega.co.in}"
-    KB_ENDPOINT="${KB_HOST:-https://kb.jackson.com}"
+    ES_ENDPOINT="${ES_HOST:-https://es.ls.local}"
+    KB_ENDPOINT="${KB_HOST:-https://kb.ls.local}"
     ES_USERNAME="${ES_USER:-elastic}"
     ES_PASSWORD="${ES_PASS:-default_elastic_password}"
     DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
 
-    OS_ENDPOINT="${OS_HOST:-https://localhost:9200}"
+    OS_ENDPOINT="${OS_HOST:-https://os.ls.local:9200}"
     OS_USERNAME="${OS_USER:-admin}"
     OS_PASSWORD="${OS_PASS:-default_admin_password}"
 
@@ -174,7 +174,7 @@ input {
         index => "$title,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
         scroll => "5m"
-        size => 500
+        size => 2000
         docinfo => true
         docinfo_target => "[@metadata][doc]"
     }
