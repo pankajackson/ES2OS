@@ -53,10 +53,16 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
 
 ## Usage
 
-1. **Run Migration:**:
+1. **Run Migration with default env.sh file:**:
 
    ```bash
    ./es2os.sh
+   ```
+
+2. **Run Migration with custom env file:**:
+
+   ```bash
+   ./es2os.sh /some/location/custom_env.sh
    ```
 
    This command will:
@@ -64,11 +70,7 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    - Fetch data views from Kibana.
    - Generate a Logstash configuration for each data view.
    - Migrate data to OpenSearch based on each configuration.
-
-2. **Run Migration:**:
-
-   The script generates a report file with the status of each data view in
-   `output_files/dataviews_migration_report.csv.`
+   - The script generates a report file with the status of each data view in `output_files/dataviews_migration_report.csv.`
 
 ## Configuration
 
@@ -86,6 +88,9 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`OS_HOST`**: OpenSearch host (default: `https://os.la.local:9200`)
 - **`OS_USER`**: OpenSearch username (default: `admin`)
 - **`OS_PASS`**: OpenSearch password (default: `default_admin_password`)
+- **`CONFIG_CLEANUP`**: Enable Logstash config cleanup (default: `false`)
+- **`DEBUG`**: Enable debug output (default: `false`)
+- **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
 
 ### Example `env.sh`:
 
@@ -98,12 +103,15 @@ DATAVIEW_API_INSECURE=true
 OS_HOST="https://your-opensearch-host:9200"
 OS_USER="your_os_username"
 OS_PASS="your_os_password"
+CONFIG_CLEANUP=false
+DEBUG=false
+OUTPUT_DIR="./output_files"
 ```
 
 ### Other Configurable Settings in `es2os.sh`
 
-- `OUTPUT_DIR`: Directory where output files are saved. Default is `./output_files`.
-- `CONFIG_CLEANUP`: Set to `true` or `false` to control whether generated Logstash configuration files are removed after processing.
+- The script includes an automatic setup function to install required applications and dependencies.
+- A report file is generated to track the status of each data view during migration, ensuring clear visibility of progress.
 
 ## File Structure
 
@@ -116,9 +124,10 @@ OS_PASS="your_os_password"
 ## Notes
 
 - Ensure `jq` and `curl` are installed before running the script.
-- Ensure that all host URLs in the env.sh file include the protocol (http:// or https://) and port (:9200, :443, or :5601), along with the hostname.
+- Ensure that all host URLs in the `env.sh` file include the protocol (http:// or https://) and port (:9200, :443, or :5601), along with the hostname.
 - Run `./es2os.sh setup` before running the migration to install required applications.
-- To modify the cleanup behavior, set `CONFIG_CLEANUP` to `true` or `false` within the script.
+- Ensure you have the necessary permissions to run the script and install software packages.
+- Modify the `env.sh` file as needed to reflect your environment settings.
 
 ## License
 
