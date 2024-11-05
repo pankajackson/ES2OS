@@ -3,6 +3,32 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# Function to set up the workstation with required applications
+setup() {
+    echo "Setting up the workstation..."
+
+    # Import the GPG key for Elasticsearch
+    wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+
+    # Install transport package and add Elasticsearch source list
+    sudo apt-get install -y apt-transport-https jq curl
+    echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-7.x.list
+
+    # Update package list and install specific version of Logstash
+    sudo apt-get update
+    echo "Installing Logstash version 7.13.4-1..."
+    sudo apt-get install -y logstash=1:7.13.4-1
+
+    # Install the OpenSearch output plugin for Logstash
+    echo "Installing Logstash OpenSearch plugin..."
+    sudo /usr/share/logstash/bin/logstash-plugin install logstash-output-opensearch
+
+    # Verify plugin installation
+    sudo /usr/share/logstash/bin/logstash-plugin list | grep opensearch && echo "OpenSearch plugin installed successfully."
+
+    echo "Setup complete."
+}
+
 # Load environment variables and set defaults
 setup_variables() {
     # Load environment variables from env.sh, if available
@@ -208,6 +234,11 @@ EOF
 
 # Main function to run the steps in sequence
 main() {
+    if [ "$1" == "setup" ]; then
+        setup
+        exit 0
+    fi
+
     setup_variables
     fetch_dataviews
     generate_initial_report
@@ -227,4 +258,4 @@ main() {
 }
 
 # Run the main function
-main
+main "$@"
