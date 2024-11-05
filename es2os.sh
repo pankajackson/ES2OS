@@ -66,7 +66,7 @@ setup_variables() {
     mkdir -p "$LOGSTASH_CONF_DIR"
 
     # Control config cleanup
-    CONFIG_CLEANUP="${DEBUG:-false}"
+    CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
 
     # Set DEBUG to false by default
     DEBUG="${DEBUG:-false}"
@@ -197,18 +197,16 @@ EOF
         echo "        ca_file => \"$ES_CA_FILE\"" >>"$config_file"
     fi
 
-    # Close the input section
-    echo "    }" >>"$config_file"
+    # Close the input and start output section
+    cat <<EOF >>"$config_file"
+    }
+}
+output {
+EOF
 
     # Add stdout output if DEBUG is true
     if [ "$DEBUG" = true ]; then
-        cat <<EOF >>"$config_file"
-}
-output {
-    stdout { codec => json }
-EOF
-    else
-        echo "}" >>"$config_file"
+        echo "    stdout { codec => json }" >>"$config_file"
     fi
 
     # Continue with the standard output section
