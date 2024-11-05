@@ -57,7 +57,7 @@ setup_variables() {
     OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
     # Define output directory and create it if it doesn't exist
-    OUTPUT_DIR="./output_files"
+    OUTPUT_DIR="${OUTPUT_DIR:-./output_files}"
     mkdir -p "$OUTPUT_DIR"
 
     DATAVIEW_FILE="$OUTPUT_DIR/dataviews.json"
@@ -66,7 +66,10 @@ setup_variables() {
     mkdir -p "$LOGSTASH_CONF_DIR"
 
     # Control config cleanup
-    CONFIG_CLEANUP=false
+    CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
+
+    # Set DEBUG to false by default
+    DEBUG="${DEBUG:-false}"
 
     # Determine curl flags based on DATAVIEW_API_INSECURE setting
     CURL_FLAGS=""
@@ -194,14 +197,20 @@ EOF
         echo "        ca_file => \"$ES_CA_FILE\"" >>"$config_file"
     fi
 
-    # Close the input section
-    echo "    }" >>"$config_file"
-
-    # Continue with the rest of the configuration
+    # Close the input and start output section
     cat <<EOF >>"$config_file"
+    }
 }
-
 output {
+EOF
+
+    # Add stdout output if DEBUG is true
+    if [ "$DEBUG" = true ]; then
+        echo "    stdout { codec => json }" >>"$config_file"
+    fi
+
+    # Continue with the standard output section
+    cat <<EOF >>"$config_file"
     opensearch {
         hosts => ["$OS_ENDPOINT"]
         auth_type => {

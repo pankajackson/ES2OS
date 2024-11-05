@@ -13,3 +13,7 @@ OS_USER="admin"
 OS_PASS="admin"
 OS_SSL=true
 OS_SSL_CERT_VERIFY=false
+
+CONFIG_CLEANUP=false
+DEBUG=false
+OUTPUT_DIR="./output_files"
