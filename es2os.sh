@@ -31,9 +31,14 @@ setup() {
 
 # Load environment variables and set defaults
 setup_variables() {
-    # Load environment variables from env.sh, if available
-    if [ -f "./env.sh" ]; then
-        source ./env.sh
+    local env_file_path="${1:-./env.sh}"
+
+    # Load environment variables from the specified env.sh path, if available
+    if [ -f "$env_file_path" ]; then
+        echo "Loading environment variables from $env_file_path..."
+        source "$env_file_path"
+    else
+        echo "Warning: Environment file $env_file_path not found. Using default values."
     fi
 
     # Define default values for environment variables
@@ -255,7 +260,10 @@ main() {
         exit 0
     fi
 
-    setup_variables
+    # Pass custom env.sh path if provided
+    local env_file_path="${1:-./env.sh}"
+    setup_variables "$env_file_path"
+
     fetch_dataviews
     generate_initial_report
 
