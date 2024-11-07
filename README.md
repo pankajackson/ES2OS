@@ -46,9 +46,11 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    ```
 
 2. **Run Setup: To install dependencies and set up the environment, use:**:
+
    ```bash
    ./es2os.sh setup
    ```
+
    This command installs Logstash and required plugins.
 
 ## Usage
