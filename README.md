@@ -46,9 +46,11 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    ```
 
 2. **Run Setup: To install dependencies and set up the environment, use:**:
+
    ```bash
    ./es2os.sh setup
    ```
+
    This command installs Logstash and required plugins.
 
 ## Usage
@@ -56,13 +58,13 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
 1. **Run Migration with default env.sh file:**:
 
    ```bash
-   ./es2os.sh
+   ./es2os.sh migrate
    ```
 
 2. **Run Migration with custom env file:**:
 
    ```bash
-   ./es2os.sh /some/location/custom_env.sh
+   ./es2os.sh -e /some/location/custom_env.sh migrate
    ```
 
    This command will:
@@ -70,7 +72,19 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    - Fetch data views from Kibana.
    - Generate a Logstash configuration for each data view.
    - Migrate data to OpenSearch based on each configuration.
-   - The script generates a report file with the status of each data view in `output_files/dataviews_migration_report.csv.`
+   - The script generates a report file with the status of each data view in `output_files/dataviews/dataviews_migration_report.csv.`
+
+3. **Download Dashboards:**:
+
+   ```bash
+   ./es2os.sh getdashboards
+   ```
+
+   This command will:
+
+   - Fetch dashboard list from Kibana.
+   - Download ndjson file for each dashboard.
+   - The script download all dashboard in `output_files/dashboards.`
 
 ## Configuration
 
@@ -117,9 +131,12 @@ OUTPUT_DIR="./output_files"
 
 - `es2os.sh`: Main script for data view migration.
 - `output_files/`: Contains generated files:
-  - `dataviews.json`: Fetched data views.
-  - `dataviews_migration_report.csv`: Report file with migration status for each data view.
-  - `ls_confs/`: Directory for generated Logstash configuration files.
+  - `dashboards/`: Directory to export all the dashboards.
+    - `dashboards.json`: Fetched dashboards.
+  - `datadiews/`:
+    - `dataviews.json`: Fetched data views.
+    - `dataviews_migration_report.csv`: Report file with migration status for each data view.
+  - `logsrash/`: Directory for generated Logstash configuration files.
 
 ## Notes
 
