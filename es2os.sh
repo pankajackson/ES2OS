@@ -262,16 +262,8 @@ EOF
     fi
 }
 
-# Main function to run the steps in sequence
-main() {
-    if [ "$1" == "setup" ]; then
-        setup
-        exit 0
-    fi
-
-    # Pass custom env.sh path if provided
-    local env_file_path="${1:-./env.sh}"
-    setup_variables "$env_file_path"
+migrate() {
+    echo "Starting data migration..."
 
     fetch_dataviews
     generate_initial_report
@@ -287,7 +279,39 @@ main() {
         fi
     done
 
-    echo "All data views processed."
+    echo "Data migration complete."
+}
+
+# Main function to run the steps in sequence
+main() {
+    # Process options
+    while getopts "e:" opt; do
+        case "$opt" in
+        e) env_file="$OPTARG" ;;
+        *)
+            echo "Usage: $0 [-e env_file] {setup|migrate}"
+            exit 1
+            ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    # Set up environment variables
+    setup_variables "$env_file"
+
+    # Handle commands (setup or migrate)
+    case "$1" in
+    setup)
+        setup
+        ;;
+    migrate)
+        migrate
+        ;;
+    *)
+        echo "Invalid command. Usage: $0 {setup|migrate}"
+        exit 1
+        ;;
+    esac
 }
 
 # Run the main function
