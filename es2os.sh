@@ -60,10 +60,16 @@ setup_variables() {
     OUTPUT_DIR="${OUTPUT_DIR:-./output_files}"
     mkdir -p "$OUTPUT_DIR"
 
-    DATAVIEW_FILE="$OUTPUT_DIR/dataviews.json"
-    REPORT_FILE="$OUTPUT_DIR/dataviews_migration_report.csv"
-    LOGSTASH_CONF_DIR="$OUTPUT_DIR/ls_confs"
+    DATAVIEW_DIR="$OUTPUT_DIR/dataviews"
+    mkdir -p "$DATAVIEW_DIR"
+    DATAVIEW_FILE="$DATAVIEW_DIR/dataviews.json"
+    REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
+
+    LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash"
     mkdir -p "$LOGSTASH_CONF_DIR"
+
+    DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
+    mkdir -p "$DASHBOARD_DIR"
 
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
@@ -97,6 +103,43 @@ fetch_dataviews() {
     # Output the content for debugging
     echo "Response from API:"
     cat "$DATAVIEW_FILE"
+    echo ""
+}
+
+# Fetch data views from API and save to file
+get_dashboards() {
+    echo "Fetching data views from $KB_ENDPOINT..."
+
+    DASHBOARD_FILE="$DASHBOARD_DIR/dashboards.json"
+    curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/saved_objects/_find?type=dashboard&per_page=10000" -o "$DASHBOARD_FILE"
+
+    # Check if data view file was created and is not empty
+    if [[ ! -s "$DASHBOARD_FILE" ]]; then
+        echo "No dashboard found or failed to fetch dashboards. Exiting."
+        exit 1
+    fi
+
+    # Output the content for debugging
+    echo "Response from API:"
+    cat "$DASHBOARD_FILE"
+    echo ""
+    echo "Total Dashboards found:" "$(jq -c '.total' "$DASHBOARD_FILE")"
+    jq -c '.saved_objects[]' "$DASHBOARD_FILE" | while read -r row; do
+        id=$(echo "$row" | jq -r '.id')
+        title=$(echo "$row" | jq -r '.attributes.title')
+        sanitized_dashboard_file_name=$(sanitize_name "$title-$id")
+        dashboard_file=$DASHBOARD_DIR/$sanitized_dashboard_file_name.ndjson
+        echo "Exporting dashboard: $id $title: $dashboard_file"
+
+        # Export each dashboard to a separate ndjson file
+        curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/saved_objects/_export" -H 'kbn-xsrf: true' -H 'Content-Type: application/json' -d '{
+            "objects": [{"type": "dashboard", "id": "'"$id"'"}],
+            "includeReferencesDeep": true
+        }' >"$dashboard_file"
+    done
+
+    echo "Dashboard export completed. Files are in the $DASHBOARD_DIR directory."
+
 }
 
 # Initialize report file with all data views marked as UnProcessed
@@ -262,16 +305,8 @@ EOF
     fi
 }
 
-# Main function to run the steps in sequence
-main() {
-    if [ "$1" == "setup" ]; then
-        setup
-        exit 0
-    fi
-
-    # Pass custom env.sh path if provided
-    local env_file_path="${1:-./env.sh}"
-    setup_variables "$env_file_path"
+migrate() {
+    echo "Starting data migration..."
 
     fetch_dataviews
     generate_initial_report
@@ -287,7 +322,42 @@ main() {
         fi
     done
 
-    echo "All data views processed."
+    echo "Data migration complete."
+}
+
+# Main function to run the steps in sequence
+main() {
+    # Process options
+    while getopts "e:" opt; do
+        case "$opt" in
+        e) env_file="$OPTARG" ;;
+        *)
+            echo "Usage: $0 [-e env_file] {setup|migrate|getdashboards}"
+            exit 1
+            ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    # Set up environment variables
+    setup_variables "$env_file"
+
+    # Handle commands (setup or migrate)
+    case "$1" in
+    setup)
+        setup
+        ;;
+    getdashboards)
+        get_dashboards
+        ;;
+    migrate)
+        migrate
+        ;;
+    *)
+        echo "Invalid command. Usage: $0 {setup|migrate|getdashboards}"
+        exit 1
+        ;;
+    esac
 }
 
 # Run the main function
