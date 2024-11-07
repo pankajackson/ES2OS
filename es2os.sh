@@ -60,10 +60,16 @@ setup_variables() {
     OUTPUT_DIR="${OUTPUT_DIR:-./output_files}"
     mkdir -p "$OUTPUT_DIR"
 
-    DATAVIEW_FILE="$OUTPUT_DIR/dataviews.json"
-    REPORT_FILE="$OUTPUT_DIR/dataviews_migration_report.csv"
-    LOGSTASH_CONF_DIR="$OUTPUT_DIR/ls_confs"
+    DATAVIEW_DIR="$OUTPUT_DIR/dataviews"
+    mkdir -p "$DATAVIEW_DIR"
+    DATAVIEW_FILE="$DATAVIEW_DIR/dataviews.json"
+    REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
+
+    LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash"
     mkdir -p "$LOGSTASH_CONF_DIR"
+
+    DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
+    mkdir -p "$DASHBOARD_DIR"
 
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
@@ -102,11 +108,9 @@ fetch_dataviews() {
 
 # Fetch data views from API and save to file
 get_dashboards() {
-    DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
-    mkdir -p "$DASHBOARD_DIR"
-    DASHBOARD_FILE="$DASHBOARD_DIR/dashboards.json"
-
     echo "Fetching data views from $KB_ENDPOINT..."
+
+    DASHBOARD_FILE="$DASHBOARD_DIR/dashboards.json"
     curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/saved_objects/_find?type=dashboard&per_page=10000" -o "$DASHBOARD_FILE"
 
     # Check if data view file was created and is not empty
