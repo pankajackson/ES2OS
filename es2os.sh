@@ -86,7 +86,10 @@ setup_variables() {
 
 # Sanitize name to remove special characters
 sanitize_name() {
-    echo "$1" | sed 's/[\*\.\[\]\\^$(){}|+?]/_/g'
+    replacer_char='_'
+    input=$(echo "$1" | sed 's/^ *//;s/ *$//')
+    sanitized=$(echo "$input" | tr -c '[:alnum:]_-' "$replacer_char")
+    echo "$sanitized"
 }
 
 # Fetch data views from API and save to file
