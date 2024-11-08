@@ -77,6 +77,9 @@ setup_variables() {
     # Set DEBUG to false by default
     DEBUG="${DEBUG:-false}"
 
+    # Set batch for data migration, 2000 is default
+    BATCH_SIZE="${BATCH_SIZE:-2000}"
+
     # Determine curl flags based on DATAVIEW_API_INSECURE setting
     CURL_FLAGS=""
     if [ "$DATAVIEW_API_INSECURE" = true ]; then
@@ -86,7 +89,10 @@ setup_variables() {
 
 # Sanitize name to remove special characters
 sanitize_name() {
-    echo "$1" | tr -cd '[:alnum:]'
+    replacer_char='_'
+    input=$(echo "$1" | sed 's/^ *//;s/ *$//')
+    sanitized=$(echo "$input" | tr -c '[:alnum:]_-' "$replacer_char")
+    echo "$sanitized"
 }
 
 # Fetch data views from API and save to file
@@ -146,7 +152,7 @@ get_dashboards() {
 generate_initial_report() {
     # Initialize the report file if it doesn't exist
     if [[ ! -f "$REPORT_FILE" ]]; then
-        echo "id, Data View, Index Pattern, Status" >"$REPORT_FILE"
+        echo "sid, id, Data View, Index Pattern, Status" >"$REPORT_FILE"
     fi
 
     # Add all data views to the report with "UnProcessed" status
@@ -154,9 +160,10 @@ generate_initial_report() {
         id=$(echo "$row" | jq -r '.id')
         name=$(echo "$row" | jq -r '.name')
         title=$(echo "$row" | jq -r '.title')
+        sid=$(sanitize_name "$id")
 
-        if ! grep -q "^$id," "$REPORT_FILE"; then
-            echo "$id, $name, $title, UnProcessed" >>"$REPORT_FILE"
+        if ! grep -q "^$sid," "$REPORT_FILE"; then
+            echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
         fi
     done
 }
@@ -167,11 +174,12 @@ update_report() {
     local name=$2
     local index_pattern=$3
     local status=$4
+    local sid=$(sanitize_name "$id")
 
-    if grep -q "^$id," "$REPORT_FILE"; then
-        sed -i "s/^$id,.*/$id, $name, $index_pattern, $status/" "$REPORT_FILE"
+    if grep -q "^$sid," "$REPORT_FILE"; then
+        sed -i "s/^$sid,.*/$sid, $id, $name, $index_pattern, $status/" "$REPORT_FILE"
     else
-        echo "$id, $name, $index_pattern, $status" >>"$REPORT_FILE"
+        echo "$sid, $id, $name, $index_pattern, $status" >>"$REPORT_FILE"
     fi
 }
 
@@ -180,9 +188,10 @@ verify_dataview() {
     local id=$1
     local name=$2
     local title=$3
+    local sid=$(sanitize_name "$id")
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$id," "$REPORT_FILE" | cut -d ',' -f4 | tr -d ' ')
+    local status=$(grep -E "^$sid," "$REPORT_FILE" | cut -d ',' -f5 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
@@ -230,7 +239,7 @@ input {
         index => "$title,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
         scroll => "5m"
-        size => 2000
+        size => $BATCH_SIZE
         docinfo => true
         docinfo_target => "[@metadata][doc]"
 EOF
