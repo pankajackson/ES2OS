@@ -65,6 +65,9 @@ setup_variables() {
     DATAVIEW_FILE="$DATAVIEW_DIR/dataviews.json"
     REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
 
+    INDICES_DIR="$DATAVIEW_DIR/indices"
+    mkdir -p "$INDICES_DIR"
+
     LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash"
     mkdir -p "$LOGSTASH_CONF_DIR"
 
@@ -138,23 +141,57 @@ fetch_indices() {
 
     local sanitized_title=$(sanitize_name "$title")
     local sid=$(sanitize_name "$id")
-    local indices_report_file="$DATAVIEW_DIR/indices_${sanitized_title}${sid}.json"
+    local indices_report_file="$INDICES_DIR/${sanitized_title}${sid}.json"
 
     echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
 
-    # Fetch the list of indices with all necessary information
-    raw_indices_list=$(curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
-    echo "$raw_indices_list"
+    # Fetch the list of indices and capture the HTTP status code
+    response=$(curl -s -w "%{http_code}" $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" \
+        "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
 
-    # Check if indices were returned
-    if [[ -z "$raw_indices_list" ]]; then
-        echo "No indices found for data view $title. Skipping report generation."
+    http_code="${response: -3}"        # Extract last 3 characters as HTTP status code
+    raw_indices_list="${response%???}" # Remove last 3 characters to get the actual response body
+
+    # Check if the HTTP status indicates a failure
+    if [[ "$http_code" -ne 200 ]]; then
+        echo "Error: Failed to fetch indices for data view $title. HTTP Status: $http_code"
+
+        # Check if the error response is valid JSON
+        if echo "$raw_indices_list" | jq . >/dev/null 2>&1; then
+            # If JSON, include it directly in the error field
+            jq -n --arg sid "$sid" \
+                --arg name "$name" \
+                --arg title "$title" \
+                --argjson error "$raw_indices_list" \
+                '{
+                      sid: $sid,
+                      "Data View": $name,
+                      "Index Pattern": $title,
+                      indices: [],
+                      error: $error
+                  }' >"$indices_report_file"
+        else
+            # If not JSON, treat it as a string
+            jq -n --arg sid "$sid" \
+                --arg name "$name" \
+                --arg title "$title" \
+                --arg error "Failed to fetch indices: HTTP Status $http_code - $raw_indices_list" \
+                '{
+                      sid: $sid,
+                      "Data View": $name,
+                      "Index Pattern": $title,
+                      indices: [],
+                      error: $error
+                  }' >"$indices_report_file"
+        fi
         return
     fi
 
-    # Start building the JSON structure
-    {
-        # Open the main JSON object
+    # Check if indices were returned (empty response means no indices)
+    if [[ -z "$raw_indices_list" ]]; then
+        echo "No indices found for data view $title. Saving empty indices list to JSON file."
+
+        # Save JSON with empty indices and no error
         jq -n --arg sid "$sid" \
             --arg name "$name" \
             --arg title "$title" \
@@ -164,42 +201,54 @@ fetch_indices() {
                   "Index Pattern": $title,
                   indices: []
               }' >"$indices_report_file"
+        return
+    fi
 
-        # Append each index entry into the JSON structure using jq
-        while IFS= read -r line; do
-            # Split the line into columns using space as delimiter
-            read -ra columns <<<"$line"
+    # Initialize the JSON file structure for successful fetch
+    jq -n --arg sid "$sid" \
+        --arg name "$name" \
+        --arg title "$title" \
+        '{
+              sid: $sid,
+              "Data View": $name,
+              "Index Pattern": $title,
+              indices: []
+          }' >"$indices_report_file"
 
-            # Assign each column to a variable
-            uuid="${columns[3]}"
-            index_name="${columns[0]}"
-            health="${columns[1]}"
-            index_status="${columns[2]}"
-            doc_count="${columns[6]}"
-            primary_data_size="${columns[9]}"
-            store_size="${columns[8]}"
+    # Append each index entry into the JSON structure using jq
+    while IFS= read -r line; do
 
-            # Append index data to the indices array in the JSON file
-            jq --arg uuid "$uuid" \
-                --arg index_name "$index_name" \
-                --arg health "$health" \
-                --arg index_status "$index_status" \
-                --arg doc_count "$doc_count" \
-                --arg primary_data_size "$primary_data_size" \
-                --arg store_size "$store_size" \
-                '.indices += [{
-                   UUID: $uuid,
-                   "Index Name": $index_name,
-                   Health: $health,
-                   "Index Status": $index_status,
-                   "Doc Count": $doc_count,
-                   "Primary Data Size": $primary_data_size,
-                   "Store Size": $store_size
-               }]' "$indices_report_file" >tmp.json && mv tmp.json "$indices_report_file"
+        # Check if the line is empty or only contains whitespace
+        [[ -z "$line" ]] && continue
 
-        done <<<"$raw_indices_list"
+        read -ra columns <<<"$line"
+        uuid="${columns[3]}"
+        index_name="${columns[0]}"
+        health="${columns[1]}"
+        index_status="${columns[2]}"
+        doc_count="${columns[6]}"
+        primary_data_size="${columns[9]}"
+        store_size="${columns[8]}"
 
-    } >"$indices_report_file"
+        # Append index data to the indices array in the JSON file
+        jq --arg uuid "$uuid" \
+            --arg index_name "$index_name" \
+            --arg health "$health" \
+            --arg index_status "$index_status" \
+            --arg doc_count "$doc_count" \
+            --arg primary_data_size "$primary_data_size" \
+            --arg store_size "$store_size" \
+            '.indices += [{
+               UUID: $uuid,
+               "Index Name": $index_name,
+               Health: $health,
+               "Index Status": $index_status,
+               "Doc Count": $doc_count,
+               "Primary Data Size": $primary_data_size,
+               "Store Size": $store_size
+           }]' "$indices_report_file" >tmp.json && mv tmp.json "$indices_report_file"
+
+    done <<<"$raw_indices_list"
 
     echo "Indices report for data view $title saved to $indices_report_file"
 }
@@ -302,7 +351,8 @@ process_dataview() {
 
     # Sanitize title for the config filename
     local sanitized_title=$(sanitize_name "$title")
-    local config_file="$LOGSTASH_CONF_DIR/logstash_$sanitized_title.conf"
+    local sid=$(sanitize_name "$id")
+    local config_file="$LOGSTASH_CONF_DIR/${sanitized_title}${sid}.conf"
 
     # Generate Logstash configuration for the current data view
     cat <<EOF >"$config_file"
