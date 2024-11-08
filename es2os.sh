@@ -96,23 +96,6 @@ sanitize_name() {
 }
 
 # Fetch data views from API and save to file
-fetch_dataviews() {
-    echo "Fetching data views from $KB_ENDPOINT..."
-    curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/data_views" -o "$DATAVIEW_FILE"
-
-    # Check if data view file was created and is not empty
-    if [[ ! -s "$DATAVIEW_FILE" ]]; then
-        echo "No data views found or failed to fetch data views. Exiting."
-        exit 1
-    fi
-
-    # Output the content for debugging
-    echo "Response from API:"
-    cat "$DATAVIEW_FILE"
-    echo ""
-}
-
-# Fetch data views from API and save to file
 get_dashboards() {
     echo "Fetching data views from $KB_ENDPOINT..."
 
@@ -148,6 +131,96 @@ get_dashboards() {
 
 }
 
+fetch_indices() {
+    local id=$1
+    local name=$2
+    local title=$3
+
+    local sanitized_title=$(sanitize_name "$title")
+    local sid=$(sanitize_name "$id")
+    local indices_report_file="$DATAVIEW_DIR/indices_${sanitized_title}${sid}.json"
+
+    echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
+
+    # Fetch the list of indices with all necessary information
+    raw_indices_list=$(curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+    echo "$raw_indices_list"
+
+    # Check if indices were returned
+    if [[ -z "$raw_indices_list" ]]; then
+        echo "No indices found for data view $title. Skipping report generation."
+        return
+    fi
+
+    # Start building the JSON structure
+    {
+        # Open the main JSON object
+        jq -n --arg sid "$sid" \
+            --arg name "$name" \
+            --arg title "$title" \
+            '{
+                  sid: $sid,
+                  "Data View": $name,
+                  "Index Pattern": $title,
+                  indices: []
+              }' >"$indices_report_file"
+
+        # Append each index entry into the JSON structure using jq
+        while IFS= read -r line; do
+            # Split the line into columns using space as delimiter
+            read -ra columns <<<"$line"
+
+            # Assign each column to a variable
+            uuid="${columns[3]}"
+            index_name="${columns[0]}"
+            health="${columns[1]}"
+            index_status="${columns[2]}"
+            doc_count="${columns[6]}"
+            primary_data_size="${columns[9]}"
+            store_size="${columns[8]}"
+
+            # Append index data to the indices array in the JSON file
+            jq --arg uuid "$uuid" \
+                --arg index_name "$index_name" \
+                --arg health "$health" \
+                --arg index_status "$index_status" \
+                --arg doc_count "$doc_count" \
+                --arg primary_data_size "$primary_data_size" \
+                --arg store_size "$store_size" \
+                '.indices += [{
+                   UUID: $uuid,
+                   "Index Name": $index_name,
+                   Health: $health,
+                   "Index Status": $index_status,
+                   "Doc Count": $doc_count,
+                   "Primary Data Size": $primary_data_size,
+                   "Store Size": $store_size
+               }]' "$indices_report_file" >tmp.json && mv tmp.json "$indices_report_file"
+
+        done <<<"$raw_indices_list"
+
+    } >"$indices_report_file"
+
+    echo "Indices report for data view $title saved to $indices_report_file"
+}
+
+# Fetch data views from API and save to file
+fetch_dataviews() {
+    echo "Fetching data views from $KB_ENDPOINT..."
+    curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/data_views" -o "$DATAVIEW_FILE"
+
+    # Check if data view file was created and is not empty
+    if [[ ! -s "$DATAVIEW_FILE" ]]; then
+        echo "No data views found or failed to fetch data views. Exiting."
+        exit 1
+    fi
+
+    # Output the content for debugging
+    echo "Response from API:"
+    cat "$DATAVIEW_FILE"
+    echo ""
+}
+
 # Initialize report file with all data views marked as UnProcessed
 generate_initial_report() {
     # Initialize the report file if it doesn't exist
@@ -164,53 +237,11 @@ generate_initial_report() {
 
         if ! grep -q "^$sid," "$REPORT_FILE"; then
             echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
+
+            # Fetch Indices List
+            fetch_indices "$id" "$name" "$title"
         fi
     done
-}
-
-generate_inidices_report() {
-    local id=$1
-    local name=$2
-    local title=$3
-
-    local sanitized_title=$(sanitize_name "$title")
-    local sid=$(sanitize_name "$id")
-    local indices_report_file="$DATAVIEW_DIR/indices_${sanitized_title}${sid}.csv"
-
-    echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
-
-    # Fetch the list of indices with all necessary information
-    raw_indices_list=$(curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
-    echo "$raw_indices_list"
-
-    # Check if indices were returned
-    if [[ -z "$raw_indices_list" ]]; then
-        echo "No indices found for data view $title. Skipping report generation."
-        return
-    fi
-
-    # Create a CSV file with the appropriate header, including the 'Status' column
-    echo "UUID, SID, Data View, Index Pattern, Index Name, Health, Index Status, Doc Count, Primary Data Size, Store Size, Status" >"$indices_report_file"
-
-    # Parse the raw indices list and append to the CSV file
-    while IFS= read -r line; do
-        # Split the line into columns using space as delimiter
-        read -ra columns <<<"$line"
-
-        # Assign each column to a variable
-        uuid="${columns[3]}"
-        index_name="${columns[0]}"
-        health="${columns[1]}"
-        index_status="${columns[2]}"
-        doc_count="${columns[6]}"
-        primary_data_size="${columns[9]}"
-        store_size="${columns[8]}" # Using the store size for total space
-
-        # Write to CSV with the additional columns and removed unwanted columns, plus 'UnProcessed' status
-        echo "$uuid, $sid, $name, $title, $index_name, $health, $index_status, $doc_count, $primary_data_size, $store_size, UnProcessed" >>"$indices_report_file"
-    done <<<"$raw_indices_list"
-
-    echo "Indices report for data view $title saved to $indices_report_file"
 }
 
 # Update or append status in the report file
@@ -268,9 +299,6 @@ process_dataview() {
     local title=$3
 
     echo "Processing data view: $name (Index Pattern: $title)"
-
-    # Prepare Indices report
-    generate_inidices_report "$id" "$name" "$title"
 
     # Sanitize title for the config filename
     local sanitized_title=$(sanitize_name "$title")
