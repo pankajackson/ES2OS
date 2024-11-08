@@ -168,6 +168,55 @@ generate_initial_report() {
     done
 }
 
+generate_inidices_report() {
+    local id=$1
+    local name=$2
+    local title=$3
+
+    local sanitized_title=$(sanitize_name "$title")
+    local sid=$(sanitize_name "$id")
+    local indices_report_file="$DATAVIEW_DIR/indices_${sanitized_title}${sid}.csv"
+
+    echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
+
+    # Fetch the list of indices with all necessary information
+    raw_indices_list=$(curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+    echo "$raw_indices_list"
+
+    # Check if indices were returned
+    if [[ -z "$raw_indices_list" ]]; then
+        echo "No indices found for data view $title. Skipping report generation."
+        return
+    fi
+
+    # Create a CSV file with the appropriate header
+    echo "UUID, Index Name, Health, Index Status, Primary Shards Count, Replica Shards Count, Doc Count, Deleted Doc Count, Total Disk Space, Primary Data Size, Replica Data Size" >"$indices_report_file"
+
+    # Parse the raw indices list and append to the CSV file
+    while IFS= read -r line; do
+        # Split the line into columns using space as delimiter
+        read -ra columns <<<"$line"
+
+        # Assign each column to a variable
+        uuid="${columns[3]}"
+        index_name="${columns[0]}"
+        health="${columns[1]}"
+        index_status="${columns[2]}"
+        primary_shards="${columns[4]}"
+        replica_shards="${columns[5]}"
+        doc_count="${columns[6]}"
+        deleted_doc_count="${columns[7]}"
+        total_disk_space="${columns[8]}"
+        primary_data_size="${columns[9]}"
+        replica_data_size="${columns[10]}"
+
+        # Write to CSV
+        echo "$uuid, $index_name, $health, $index_status, $primary_shards, $replica_shards, $doc_count, $deleted_doc_count, $total_disk_space, $primary_data_size, $replica_data_size" >>"$indices_report_file"
+    done <<<"$raw_indices_list"
+
+    echo "Indices report for data view $title saved to $indices_report_file"
+}
+
 # Update or append status in the report file
 update_report() {
     local id=$1
@@ -223,6 +272,9 @@ process_dataview() {
     local title=$3
 
     echo "Processing data view: $name (Index Pattern: $title)"
+
+    # Prepare Indices report
+    generate_inidices_report "$id" "$name" "$title"
 
     # Sanitize title for the config filename
     local sanitized_title=$(sanitize_name "$title")
