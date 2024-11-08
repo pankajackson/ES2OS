@@ -134,6 +134,26 @@ get_dashboards() {
 
 }
 
+# Initialize report file with all data views marked as UnProcessed
+generate_initial_indices_report() {
+    # Initialize the report file if it doesn't exist
+
+    # Add all data views to the report with "UnProcessed" status
+    jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
+        id=$(echo "$row" | jq -r '.id')
+        name=$(echo "$row" | jq -r '.name')
+        title=$(echo "$row" | jq -r '.title')
+        sid=$(sanitize_name "$id")
+
+        if ! grep -q "^$sid," "$REPORT_FILE"; then
+            echo "$uuid, $index_pattern, $index, $starttime, $lastupdate, UnProcessed" >>"$REPORT_FILE"
+
+            # Fetch Indices List
+            fetch_indices "$id" "$name" "$title"
+        fi
+    done
+}
+
 fetch_indices() {
     local id=$1
     local name=$2
@@ -141,7 +161,7 @@ fetch_indices() {
 
     local sanitized_title=$(sanitize_name "$title")
     local sid=$(sanitize_name "$id")
-    local indices_report_file="$INDICES_DIR/$sid.json"
+    local indices_json_file="$INDICES_DIR/$sid.json"
 
     echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
 
@@ -169,7 +189,7 @@ fetch_indices() {
                       "Index Pattern": $title,
                       indices: [],
                       error: $error
-                  }' >"$indices_report_file"
+                  }' >"$indices_json_file"
         else
             # If not JSON, treat it as a string
             jq -n --arg sid "$sid" \
@@ -182,7 +202,7 @@ fetch_indices() {
                       "Index Pattern": $title,
                       indices: [],
                       error: $error
-                  }' >"$indices_report_file"
+                  }' >"$indices_json_file"
         fi
         return
     fi
@@ -200,7 +220,7 @@ fetch_indices() {
                   "Data View": $name,
                   "Index Pattern": $title,
                   indices: []
-              }' >"$indices_report_file"
+              }' >"$indices_json_file"
         return
     fi
 
@@ -213,7 +233,7 @@ fetch_indices() {
               "Data View": $name,
               "Index Pattern": $title,
               indices: []
-          }' >"$indices_report_file"
+          }' >"$indices_json_file"
 
     # Append each index entry into the JSON structure using jq
     while IFS= read -r line; do
@@ -246,11 +266,11 @@ fetch_indices() {
                "Doc Count": $doc_count,
                "Primary Data Size": $primary_data_size,
                "Store Size": $store_size
-           }]' "$indices_report_file" >tmp.json && mv tmp.json "$indices_report_file"
+           }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
     done <<<"$raw_indices_list"
 
-    echo "Indices report for data view $title saved to $indices_report_file"
+    echo "Indices details for data view $title saved to $indices_json_file"
 }
 
 # Fetch data views from API and save to file
