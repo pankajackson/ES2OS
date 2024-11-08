@@ -189,8 +189,8 @@ generate_inidices_report() {
         return
     fi
 
-    # Create a CSV file with the appropriate header
-    echo "UUID, Index Name, Health, Index Status, Primary Shards Count, Replica Shards Count, Doc Count, Deleted Doc Count, Total Disk Space, Primary Data Size, Replica Data Size" >"$indices_report_file"
+    # Create a CSV file with the appropriate header, including the 'Status' column
+    echo "UUID, SID, Data View, Index Pattern, Index Name, Health, Index Status, Doc Count, Primary Data Size, Store Size, Status" >"$indices_report_file"
 
     # Parse the raw indices list and append to the CSV file
     while IFS= read -r line; do
@@ -202,16 +202,12 @@ generate_inidices_report() {
         index_name="${columns[0]}"
         health="${columns[1]}"
         index_status="${columns[2]}"
-        primary_shards="${columns[4]}"
-        replica_shards="${columns[5]}"
         doc_count="${columns[6]}"
-        deleted_doc_count="${columns[7]}"
-        total_disk_space="${columns[8]}"
         primary_data_size="${columns[9]}"
-        replica_data_size="${columns[10]}"
+        store_size="${columns[8]}" # Using the store size for total space
 
-        # Write to CSV
-        echo "$uuid, $index_name, $health, $index_status, $primary_shards, $replica_shards, $doc_count, $deleted_doc_count, $total_disk_space, $primary_data_size, $replica_data_size" >>"$indices_report_file"
+        # Write to CSV with the additional columns and removed unwanted columns, plus 'UnProcessed' status
+        echo "$uuid, $sid, $name, $title, $index_name, $health, $index_status, $doc_count, $primary_data_size, $store_size, UnProcessed" >>"$indices_report_file"
     done <<<"$raw_indices_list"
 
     echo "Indices report for data view $title saved to $indices_report_file"
