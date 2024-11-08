@@ -102,6 +102,7 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`OS_HOST`**: OpenSearch host (default: `https://os.la.local:9200`)
 - **`OS_USER`**: OpenSearch username (default: `admin`)
 - **`OS_PASS`**: OpenSearch password (default: `default_admin_password`)
+- **`BATCH_SIZE`**: Docs count to transfter in a single batch  (default: `2000`)
 - **`CONFIG_CLEANUP`**: Enable Logstash config cleanup (default: `false`)
 - **`DEBUG`**: Enable debug output (default: `false`)
 - **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
@@ -117,6 +118,7 @@ DATAVIEW_API_INSECURE=true
 OS_HOST="https://your-opensearch-host:9200"
 OS_USER="your_os_username"
 OS_PASS="your_os_password"
+BATCH_SIZE=3000
 CONFIG_CLEANUP=false
 DEBUG=false
 OUTPUT_DIR="./output_files"

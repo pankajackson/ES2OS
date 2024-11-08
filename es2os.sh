@@ -77,6 +77,9 @@ setup_variables() {
     # Set DEBUG to false by default
     DEBUG="${DEBUG:-false}"
 
+    # Set batch for data migration, 2000 is default
+    BATCH_SIZE="${BATCH_SIZE:-2000}"
+
     # Determine curl flags based on DATAVIEW_API_INSECURE setting
     CURL_FLAGS=""
     if [ "$DATAVIEW_API_INSECURE" = true ]; then
@@ -236,7 +239,7 @@ input {
         index => "$title,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
         scroll => "5m"
-        size => 2000
+        size => $BATCH_SIZE
         docinfo => true
         docinfo_target => "[@metadata][doc]"
 EOF
