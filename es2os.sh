@@ -141,7 +141,7 @@ fetch_indices() {
 
     local sanitized_title=$(sanitize_name "$title")
     local sid=$(sanitize_name "$id")
-    local indices_report_file="$INDICES_DIR/${sanitized_title}${sid}.json"
+    local indices_report_file="$INDICES_DIR/$sid.json"
 
     echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
 
