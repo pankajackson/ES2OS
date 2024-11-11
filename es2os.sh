@@ -67,6 +67,7 @@ setup_variables() {
 
     INDICES_DIR="$DATAVIEW_DIR/indices"
     mkdir -p "$INDICES_DIR"
+    INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report.csv"
 
     LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash"
     mkdir -p "$LOGSTASH_CONF_DIR"
@@ -134,22 +135,31 @@ get_dashboards() {
 
 }
 
-# Initialize report file with all data views marked as UnProcessed
+# Initialize report file with all indices marked as UnProcessed
 generate_initial_indices_report() {
+    local indices_file=$1
+
     # Initialize the report file if it doesn't exist
+    if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+        echo "uuid, sid, Index Pattern, Index, Start Time, Last Update, Status" >"$INDICES_REPORT_FILE"
+    fi
 
-    # Add all data views to the report with "UnProcessed" status
-    jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
-        id=$(echo "$row" | jq -r '.id')
-        name=$(echo "$row" | jq -r '.name')
-        title=$(echo "$row" | jq -r '.title')
-        sid=$(sanitize_name "$id")
+    # Extract the general information from the indices file
+    sid=$(jq -r '.sid' "$indices_file")
+    data_view=$(jq -r '.["Data View"]' "$indices_file")
+    index_pattern=$(jq -r '.["Index Pattern"]' "$indices_file")
 
-        if ! grep -q "^$sid," "$REPORT_FILE"; then
-            echo "$uuid, $index_pattern, $index, $starttime, $lastupdate, UnProcessed" >>"$REPORT_FILE"
+    # Set current time for Start Time and Last Update
+    current_time=$(date +"%Y-%m-%d %H:%M:%S")
 
-            # Fetch Indices List
-            fetch_indices "$id" "$name" "$title"
+    # Iterate over each index entry within the indices array
+    jq -c '.indices[]' "$indices_file" | while read -r index; do
+        uuid=$(echo "$index" | jq -r '.UUID')
+        index_name=$(echo "$index" | jq -r '.["Index Name"]')
+
+        # Check if the UUID is already in the report file to avoid duplicates
+        if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
+            echo "$uuid, $sid, $index_pattern, $index_name, $current_time, $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
 }
@@ -268,6 +278,8 @@ fetch_indices() {
                "Store Size": $store_size
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
+        generate_initial_indices_report "$indices_json_file"
+
     done <<<"$raw_indices_list"
 
     echo "Indices details for data view $title saved to $indices_json_file"
@@ -359,6 +371,31 @@ verify_dataview() {
     fi
 
     return 0
+}
+
+process_ind() {
+    echo asd
+}
+
+process_dv() {
+    local id=$1
+    local name=$2
+    local title=$3
+    echo "Processing data view: $name (Index Pattern: $title)"
+
+    # Sanitize title for the config filename
+    local sanitized_title=$(sanitize_name "$title")
+    local sid=$(sanitize_name "$id")
+    local indices_list_file="$INDICES_DIR/$sid.json"
+
+    jq -c '.indices[]' "$indices_list_file" | while read -r row; do
+        uuid=$(echo "$row" | jq -r '.uuid')
+        index=$(echo "$row" | jq -r '.["Index Name"]')
+
+        if verify_dataview "$id" "$name" "$title"; then
+            process_dataview "$id" "$name" "$title"
+        fi
+    done
 }
 
 # Process individual data view with Logstash
