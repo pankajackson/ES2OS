@@ -373,7 +373,52 @@ verify_dataview() {
     return 0
 }
 
-process_ind() {
+# Update or append status in the report file
+update_indices_report() {
+    local uuid=$1
+    local status=$2
+
+    # Update Status based on UUID
+    awk -v uuid="$uuid" -v status="$status" '
+        BEGIN { FS = OFS = "," }        # Set field separator (FS) and output field separator (OFS) to comma
+        NR == 1 { print; next }         # Print the header line as is
+        $1 == uuid { $7 = status }      # If UUID matches, update the Status field (7th column)
+        { print }                       # Print all lines (modified or not)
+    ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
+}
+
+# Verify if the data view should be processed or skipped
+verify_indices() {
+    local uuid=$1
+    local index=$2
+
+    # Check the report file for the current data view's status
+    local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f7 | tr -d ' ')
+
+    # If status is "Done" or "Skipped", skip processing
+    if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
+        echo "Indices $index is already processed. Skipping..."
+        return 1
+    fi
+
+    # Skip system indexes if configured to do so
+    if [[ "$IGNORE_SYSTEM_INDEXES" = true && "$title" == .* ]]; then
+        echo "Ignoring system index: $title"
+        update_indices_report "$uuid" "Skipped"
+        return 1
+    fi
+
+    # Check if the index exists
+    if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$index" | grep -q "200"; then
+        echo "Index $index does not exist. Skipping this data view."
+        update_indices_report "$uuid" "Skipped"
+        return 1
+    fi
+
+    return 0
+}
+
+process_indices() {
     echo asd
 }
 
@@ -384,7 +429,6 @@ process_dv() {
     echo "Processing data view: $name (Index Pattern: $title)"
 
     # Sanitize title for the config filename
-    local sanitized_title=$(sanitize_name "$title")
     local sid=$(sanitize_name "$id")
     local indices_list_file="$INDICES_DIR/$sid.json"
 
@@ -392,8 +436,8 @@ process_dv() {
         uuid=$(echo "$row" | jq -r '.uuid')
         index=$(echo "$row" | jq -r '.["Index Name"]')
 
-        if verify_dataview "$id" "$name" "$title"; then
-            process_dataview "$id" "$name" "$title"
+        if verify_indices "$uuid" "$index"; then
+            process_indices "$uuid" "$index"
         fi
     done
 }
