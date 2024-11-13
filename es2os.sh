@@ -84,6 +84,9 @@ setup_variables() {
     # Set batch for data migration, 2000 is default
     BATCH_SIZE="${BATCH_SIZE:-2000}"
 
+    # Set default JAVAOPTS
+    LS_JAVA_OPTS="${LS_JAVA_OPTS:--Xms1g -Xmx1g}"
+
     # Determine curl flags based on DATAVIEW_API_INSECURE setting
     CURL_FLAGS=""
     if [ "$DATAVIEW_API_INSECURE" = true ]; then
@@ -97,6 +100,37 @@ sanitize_name() {
     input=$(echo "$1" | sed 's/^ *//;s/ *$//')
     sanitized=$(echo "$input" | tr -c '[:alnum:]_-' "$replacer_char")
     echo "$sanitized"
+}
+
+monitor_jvm() {
+    # Temporarily disable `set -e` for this function
+    set +e
+
+    # Get all the Logstash PIDs once
+    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
+
+    if [ -z "$LOGSTASH_PIDS" ]; then
+        echo "No Logstash processes found."
+    else
+        for PID in $LOGSTASH_PIDS; do
+            echo "Monitoring PID: $PID"
+            # Run jstat command, suppress errors, and calculate heap usage
+            sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
+                tail -n 1 |
+                awk '{
+                # Column indexes may vary; typical indexes for jstat -gc output:
+                # S0U (Survivor 0 Used), S1U (Survivor 1 Used), EU (Eden Used), OU (Old Used), MU (Metaspace Used)
+                # S0C, S1C, EC, OC, MC represent capacities of these respective memory pools
+                used_heap = $3 + $4 + $6 + $8      # Sum of used space in Survivor, Eden, and Old generations
+                total_heap = $5 + $7 + $9          # Sum of capacities of Survivor, Eden, and Old generations
+                available_heap = total_heap - used_heap
+                printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
+            }'
+        done
+    fi
+
+    # Restore `set -e` to its previous state
+    set -e
 }
 
 # Fetch data views from API and save to file
@@ -227,6 +261,7 @@ run_logstash() {
     export ES_PASSWORD="$ES_PASSWORD"
     export OS_USERNAME="$OS_USERNAME"
     export OS_PASSWORD="$OS_PASSWORD"
+    export LS_JAVA_OPTS="$LS_JAVA_OPTS"
 
     # Test the Logstash configuration
     echo "Testing Logstash configuration for $index..."
@@ -656,6 +691,9 @@ main() {
     case "$1" in
     setup)
         setup
+        ;;
+    monitorjvm)
+        monitor_jvm
         ;;
     getdashboards)
         get_dashboards
