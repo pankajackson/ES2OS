@@ -413,10 +413,8 @@ fetch_indices() {
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
         # Generate Initial Indices Report
-        if generate_initial_indices_report "$indices_json_file"; then
-            echo "Initial indices report generated: $INDICES_REPORT_FILE"
-        else
-            echo "Initial indices report generation at $INDICES_REPORT_FILE Failed!"
+        if ! generate_initial_indices_report "$indices_json_file"; then
+            echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
             exit 1
         fi
 
@@ -455,13 +453,12 @@ generate_initial_report() {
         name=$(echo "$row" | jq -r '.name')
         title=$(echo "$row" | jq -r '.title')
         sid=$(sanitize_name "$id")
-
         if ! grep -q "^$sid," "$REPORT_FILE"; then
             echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
 
-            # Fetch Indices List
-            fetch_indices "$id" "$name" "$title"
         fi
+        # Fetch Indices List
+        fetch_indices "$id" "$name" "$title"
     done
 }
 
