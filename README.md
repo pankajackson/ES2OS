@@ -70,9 +70,10 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    This command will:
 
    - Fetch data views from Kibana.
-   - Generate a Logstash configuration for each data view.
+   - Generate a Logstash configuration for each indices.
    - Migrate data to OpenSearch based on each configuration.
    - The script generates a report file with the status of each data view in `output_files/dataviews/dataviews_migration_report.csv.`
+   - The script generates a report file with the status of each indices in `output_files/dataviews/indices/indices_migration_report.csv.`
 
 3. **Download Dashboards:**:
 
@@ -136,6 +137,8 @@ OUTPUT_DIR="./output_files"
   - `dashboards/`: Directory to export all the dashboards.
     - `dashboards.json`: Fetched dashboards.
   - `datadiews/`:
+    - `indices/`:
+      - `dataviews_migration_report.csv`: Report file with migration status for each indices.
     - `dataviews.json`: Fetched data views.
     - `dataviews_migration_report.csv`: Report file with migration status for each data view.
   - `logsrash/`: Directory for generated Logstash configuration files.
