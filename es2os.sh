@@ -135,6 +135,110 @@ get_dashboards() {
 
 }
 
+generate_logstash_config() {
+    local uuid=$1
+    local index=$2
+
+    # Sanitize index for the config filename
+    local sanitized_index=$(sanitize_name "$index")
+    local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
+
+    # Generate Logstash configuration for the current data view
+    cat <<EOF >"$config_file"
+input {
+    elasticsearch {
+        hosts => ["${ES_ENDPOINT#https://}"]
+        user => "\${ES_USERNAME}"
+        ssl => $ES_SSL
+        password => "\${ES_PASSWORD}"
+        index => "$index,-.*"
+        query => '{ "query": { "query_string": { "query": "*" } } }'
+        scroll => "5m"
+        size => $BATCH_SIZE
+        docinfo => true
+        docinfo_target => "[@metadata][doc]"
+EOF
+
+    # Add ca_file only if ES_CA_FILE is set
+    if [ -n "$ES_CA_FILE" ]; then
+        echo "        ca_file => \"$ES_CA_FILE\"" >>"$config_file"
+    fi
+
+    # Close the input and start output section
+    cat <<EOF >>"$config_file"
+    }
+}
+output {
+EOF
+
+    # Add stdout output if DEBUG is true
+    if [ "$DEBUG" = true ]; then
+        echo "    stdout { codec => json }" >>"$config_file"
+    fi
+
+    # Continue with the standard output section
+    cat <<EOF >>"$config_file"
+    opensearch {
+        hosts => ["$OS_ENDPOINT"]
+        auth_type => {
+            type => 'basic'
+            user => "\${OS_USERNAME}"
+            password => "\${OS_PASSWORD}"
+        }
+        ssl => $OS_SSL
+        ssl_certificate_verification => $OS_SSL_CERT_VERIFY
+        index => "%{[@metadata][doc][_index]}"
+        document_id => "%{[@metadata][doc][_id]}"
+    }
+}
+EOF
+
+    echo "Logstash configuration for Index $index created as $config_file"
+
+}
+
+run_logstash() {
+    local uuid=$1
+    local index=$2
+
+    # Sanitize index for the config filename
+    local sanitized_index=$(sanitize_name "$index")
+    local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
+
+    # Update report file status to "InProgress"
+    update_indices_report "$uuid" "InProgress"
+
+    # Set environment variables for Logstash
+    export ES_USERNAME="$ES_USERNAME"
+    export ES_PASSWORD="$ES_PASSWORD"
+    export OS_USERNAME="$OS_USERNAME"
+    export OS_PASSWORD="$OS_PASSWORD"
+
+    # Test the Logstash configuration
+    echo "Testing Logstash configuration for $index..."
+    if sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --config.test_and_exit; then
+        echo "Logstash configuration for $index is valid."
+
+        # Run Logstash
+        echo "Running Logstash for data view $index..."
+        if sudo -E /usr/share/logstash/bin/logstash -f "$config_file"; then
+            echo "Data view $index processed successfully."
+            update_report "$uuid" "Done"
+        else
+            echo "Failed to process data view $index."
+            update_report "$uuid" "Failed"
+        fi
+    else
+        echo "Logstash configuration for $index is invalid."
+        update_report "$uuid" "Failed"
+    fi
+
+    # Remove config if CONFIG_CLEANUP is true
+    if [ "$CONFIG_CLEANUP" = true ]; then
+        rm "$config_file"
+    fi
+}
+
 # Initialize report file with all indices marked as UnProcessed
 generate_initial_indices_report() {
     local indices_file=$1
@@ -419,10 +523,14 @@ verify_indices() {
 }
 
 process_indices() {
-    echo asd
+    local uuid=$1
+    local index=$2
+
+    generate_logstash_config $uuid $index
+    run_logstash $uuid $index
 }
 
-process_dv() {
+process_dataview() {
     local id=$1
     local name=$2
     local title=$3
@@ -443,7 +551,7 @@ process_dv() {
 }
 
 # Process individual data view with Logstash
-process_dataview() {
+process_dataview_old() {
     local id=$1
     local name=$2
     local title=$3
