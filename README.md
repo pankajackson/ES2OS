@@ -23,9 +23,10 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
 ## Features
 
 - Fetches data views from Kibana and generates a report file with migration statuses.
-- Supports automatic setup for dependencies like Logstash and required plugins.
-- Migration report with detailed status tracking.
-- Cleanup option to remove generated configuration files after migration.
+- Supports automatic setup of dependencies such as Logstash and required plugins.
+- Generates a migration report with detailed status tracking.
+- Includes an option to clean up and remove generated configuration files after migration.
+- Monitors Logstash heap usage during the migration process.
 
 ## Requirements
 
@@ -70,9 +71,10 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    This command will:
 
    - Fetch data views from Kibana.
-   - Generate a Logstash configuration for each data view.
+   - Generate a Logstash configuration for each indices.
    - Migrate data to OpenSearch based on each configuration.
    - The script generates a report file with the status of each data view in `output_files/dataviews/dataviews_migration_report.csv.`
+   - The script generates a report file with the status of each indices in `output_files/dataviews/indices/indices_migration_report.csv.`
 
 3. **Download Dashboards:**:
 
@@ -85,6 +87,19 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    - Fetch dashboard list from Kibana.
    - Download ndjson file for each dashboard.
    - The script download all dashboard in `output_files/dashboards.`
+
+4. **Monitor Logstash Heap Usage:**:
+
+   ```bash
+   ./es2os.sh monitorjvm
+   ```
+
+   This command will:
+
+   - Fetch all running Logstash PIDs.
+   - Retrieve heap memory usage statistics for each Logstash process using the `jstat` command.
+   - Display the total, used, and available heap memory sizes in MB for each Logstash process.
+   - Continuously monitor heap usage while Logstash processes are running.
 
 ## Configuration
 
@@ -102,9 +117,11 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`OS_HOST`**: OpenSearch host (default: `https://os.la.local:9200`)
 - **`OS_USER`**: OpenSearch username (default: `admin`)
 - **`OS_PASS`**: OpenSearch password (default: `default_admin_password`)
-- **`BATCH_SIZE`**: Docs count to transfter in a single batch  (default: `2000`)
+- **`BATCH_SIZE`**: Docs count to transfter in a single batch (default: `2000`)
+- **`CONCURRENCY`**: The number of parallel Logstash instances to process indices. Defaults to `2` and has a minimum value of `2` even if a lower or invalid value is set.
 - **`CONFIG_CLEANUP`**: Enable Logstash config cleanup (default: `false`)
 - **`DEBUG`**: Enable debug output (default: `false`)
+- **`LS_JAVA_OPTS`**: Environment variable that can override JVM settings in the jvm.options for logstash (default: null)
 - **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
 
 ### Example `env.sh`:
@@ -136,6 +153,8 @@ OUTPUT_DIR="./output_files"
   - `dashboards/`: Directory to export all the dashboards.
     - `dashboards.json`: Fetched dashboards.
   - `datadiews/`:
+    - `indices/`:
+      - `dataviews_migration_report.csv`: Report file with migration status for each indices.
     - `dataviews.json`: Fetched data views.
     - `dataviews_migration_report.csv`: Report file with migration status for each data view.
   - `logsrash/`: Directory for generated Logstash configuration files.
