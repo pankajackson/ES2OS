@@ -23,9 +23,10 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
 ## Features
 
 - Fetches data views from Kibana and generates a report file with migration statuses.
-- Supports automatic setup for dependencies like Logstash and required plugins.
-- Migration report with detailed status tracking.
-- Cleanup option to remove generated configuration files after migration.
+- Supports automatic setup of dependencies such as Logstash and required plugins.
+- Generates a migration report with detailed status tracking.
+- Includes an option to clean up and remove generated configuration files after migration.
+- Monitors Logstash heap usage during the migration process.
 
 ## Requirements
 
@@ -87,6 +88,19 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
    - Download ndjson file for each dashboard.
    - The script download all dashboard in `output_files/dashboards.`
 
+4. **Monitor Logstash Heap Usage:**:
+
+   ```bash
+   ./es2os.sh monitorjvm
+   ```
+
+   This command will:
+
+   - Fetch all running Logstash PIDs.
+   - Retrieve heap memory usage statistics for each Logstash process using the `jstat` command.
+   - Display the total, used, and available heap memory sizes in MB for each Logstash process.
+   - Continuously monitor heap usage while Logstash processes are running.
+
 ## Configuration
 
 This script allows you to set environment-specific values in an optional `env.sh` file. By configuring these variables, you can customize connections and defaults for Elasticsearch, Kibana, and OpenSearch.
@@ -103,9 +117,10 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`OS_HOST`**: OpenSearch host (default: `https://os.la.local:9200`)
 - **`OS_USER`**: OpenSearch username (default: `admin`)
 - **`OS_PASS`**: OpenSearch password (default: `default_admin_password`)
-- **`BATCH_SIZE`**: Docs count to transfter in a single batch  (default: `2000`)
+- **`BATCH_SIZE`**: Docs count to transfter in a single batch (default: `2000`)
 - **`CONFIG_CLEANUP`**: Enable Logstash config cleanup (default: `false`)
 - **`DEBUG`**: Enable debug output (default: `false`)
+- **`LS_JAVA_OPTS`**: Environment variable that can override JVM settings in the jvm.options for logstash (default: `-Xms1g -Xmx1g`)
 - **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
 
 ### Example `env.sh`:
