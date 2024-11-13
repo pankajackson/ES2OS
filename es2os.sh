@@ -623,8 +623,6 @@ migrate() {
             else
                 update_report "$id" "$name" "$title" "Failed"
             fi
-        else
-            echo "Skipping Data View '$title': Verification failed."
         fi
     done || exit 1
     echo "Data migration complete."
