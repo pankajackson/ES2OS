@@ -487,7 +487,7 @@ verify_dataview() {
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
-        echo "Data view $name is already processed. Skipping..."
+        echo "Data view $title is already processed. Skipping..."
         return 1
     fi
 
@@ -611,25 +611,17 @@ migrate() {
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
 
-        echo "Processing Data View: $title (ID: $id, Name: $name)"
-
-        # Verify the data view before processing
         if verify_dataview "$id" "$name" "$title"; then
             update_report "$id" "$name" "$title" "InProgress"
-
-            # Process data view and update status based on success/failure
             if process_dataview "$id" "$name" "$title"; then
                 update_report "$id" "$name" "$title" "Done"
-                echo "Data View '$title' migration completed successfully."
             else
                 update_report "$id" "$name" "$title" "Failed"
-                echo "Error: Data View '$title' migration failed."
             fi
         else
             echo "Skipping Data View '$title': Verification failed."
         fi
-    done || exit 1 # Ensures the loop exits if a command inside it fails
-
+    done || exit 1
     echo "Data migration complete."
 }
 
