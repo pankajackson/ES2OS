@@ -292,7 +292,7 @@ generate_initial_indices_report() {
 
         # Check if the UUID is already in the report file to avoid duplicates
         if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
-            echo "$uuid, $sid, $index_pattern, $index_name, '', $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
+            echo "$uuid, $sid, $index_pattern, $index_name, , $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
 
@@ -520,12 +520,20 @@ update_indices_report() {
         return 1
     fi
 
-    # Update Status based on UUID
-    awk -v uuid="$uuid" -v status=" $status" '
-        BEGIN { FS = OFS = "," }          # Set field separator (FS) and output field separator (OFS) to comma
-        NR == 1 { print; next }           # Print the header line as is
-        $1 == uuid { $7 = status }        # If UUID matches, update the Status field (7th column)
-        { print }                         # Print all lines (modified or not)
+    # Set the current time
+    local current_time
+    current_time=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Update Status, Last Update, and Start Time if empty, based on UUID
+    awk -v uuid="$uuid" -v status="$status" -v current_time="$current_time" '
+        BEGIN { FS = OFS = ", " }                     # Set field separator (FS) and output field separator (OFS) to comma
+        NR == 1 { print; next }                      # Print the header line as is
+        $1 == uuid {                                 # Check if UUID matches
+            $7 = status                              # Update the Status field (7th column)
+            $6 = current_time                        # Always update Last Update field (6th column)
+            if ($5 == "") $5 = current_time          # Update Start Time (5th column) only if it is empty
+        }
+        { print }                                    # Print all lines (modified or not)
     ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
 }
 
