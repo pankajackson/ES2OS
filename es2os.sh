@@ -292,11 +292,10 @@ generate_initial_indices_report() {
 
         # Check if the UUID is already in the report file to avoid duplicates
         if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
-            echo "$uuid, $sid, $index_pattern, $index_name, $current_time, $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
+            echo "$uuid, $sid, $index_pattern, $index_name, '', $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
 
-    echo "Initial indices report generated: $INDICES_REPORT_FILE"
 }
 
 fetch_indices() {
@@ -413,7 +412,13 @@ fetch_indices() {
                "Store Size": $store_size
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
-        generate_initial_indices_report "$indices_json_file"
+        # Generate Initial Indices Report
+        if generate_initial_indices_report "$indices_json_file"; then
+            echo "Initial indices report generated: $INDICES_REPORT_FILE"
+        else
+            echo "Initial indices report generation at $INDICES_REPORT_FILE Failed!"
+            exit 1
+        fi
 
     done <<<"$raw_indices_list"
 
