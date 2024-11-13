@@ -69,8 +69,12 @@ setup_variables() {
     mkdir -p "$INDICES_DIR"
     INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report.csv"
 
-    LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash"
+    LOGSTASH_DIR="$OUTPUT_DIR/logstash"
+    mkdir -p "$LOGSTASH_DIR"
+    LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash/conf"
     mkdir -p "$LOGSTASH_CONF_DIR"
+    LOGSTASH_DATA_DIR="$OUTPUT_DIR/logstash/data"
+    mkdir -p "$LOGSTASH_DATA_DIR"
 
     DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
     mkdir -p "$DASHBOARD_DIR"
@@ -83,6 +87,12 @@ setup_variables() {
 
     # Set batch for data migration, 2000 is default
     BATCH_SIZE="${BATCH_SIZE:-2000}"
+
+    # Set concurrency, 2 is default
+    CONCURRENCY="${CONCURRENCY:-2}"
+    if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || [ "$CONCURRENCY" -lt 2 ]; then
+        CONCURRENCY=2
+    fi
 
     # Set default JAVAOPTS
     LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
@@ -176,10 +186,12 @@ logstash_cleanup() {
     # Sanitize index for the config filename
     local sanitized_index=$(sanitize_name "$index")
     local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
+    local logstash_data_dir="$LOGSTASH_DATA_DIR/$uuid"
 
     # Remove config if CONFIG_CLEANUP is true
     if [ "$CONFIG_CLEANUP" = true ]; then
         rm "$config_file"
+        rm -rf $logstash_data_dir
     fi
 }
 
@@ -253,6 +265,10 @@ run_logstash() {
     local sanitized_index=$(sanitize_name "$index")
     local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
 
+    # Create a unique path.data directory for each instance of Logstash
+    local logstash_data_dir="$LOGSTASH_DATA_DIR/$uuid"
+    mkdir -p "$logstash_data_dir" # Create the directory if it doesn't exist
+
     # Update report file status to "InProgress"
     update_indices_report "$uuid" "InProgress"
 
@@ -265,20 +281,32 @@ run_logstash() {
 
     # Test the Logstash configuration
     echo "Testing Logstash configuration for $index..."
-    if sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --config.test_and_exit; then
+    if sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" --config.test_and_exit; then
         echo "Logstash configuration for $index is valid."
 
-        # Run Logstash
-        echo "Running Logstash for data view $index..."
-        if sudo -E /usr/share/logstash/bin/logstash -f "$config_file"; then
-            echo "Data view $index processed successfully."
+        # Run Logstash in the background with the unique path.data
+        echo "Running Logstash for index $index..."
+        sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
+        pid=$!                                                                                        # Capture the background process's PID
+        echo "Logstash for index $index started with PID $pid."
+        echo $pid >>"$LOGSTASH_DIR/pids" # Add PID in .pids file
+
+        # Wait for the background process to finish
+        wait $pid # This ensures we wait for Logstash to finish before continuing
+
+        # Check if Logstash succeeded or failed
+        if [ $? -eq 0 ]; then
+            echo "Index $index processed successfully."
             update_indices_report "$uuid" "Done"
+            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 0
         else
-            echo "Failed to process data view $index."
+            echo "Failed to process Index $index."
             update_indices_report "$uuid" "Failed"
+            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 1
         fi
+
     else
         echo "Logstash configuration for $index is invalid."
         update_indices_report "$uuid" "Failed"
@@ -627,16 +655,42 @@ process_dataview() {
     local sid=$(sanitize_name "$id")
     local indices_list_file="$INDICES_DIR/$sid.json"
 
+    # Max number of parallel processes (example: 4)
+    local max_parallel=$CONCURRENCY
+    local count=0
+
+    # Create a background process for each index
     jq -c '.indices[]' "$indices_list_file" | while read -r row; do
         uuid=$(echo "$row" | jq -r '.UUID')
         index=$(echo "$row" | jq -r '.["Index Name"]')
 
         if verify_indices "$uuid" "$index"; then
-            if ! process_indices "$uuid" "$index"; then
-                return 1
+            # Process the index in the background
+            process_indices "$uuid" "$index" &
+
+            count=$((count + 1))
+
+            # Check if we've reached the concurrency limit
+            if [[ $count -ge $max_parallel ]]; then
+                # Wait for any of the running processes to finish before starting new ones
+                wait -n
+                count=$((count - 1)) # Decrement the counter after waiting
             fi
         fi
     done
+
+    # Wait for running processes
+    while [ -s "$LOGSTASH_DIR/pids" ]; do
+        # Iterate through each PID in the .pids file
+        while read -r pid; do
+            # echo "Process $pid is still running."
+            continue
+
+        done <"$LOGSTASH_DIR/pids"
+        sleep 2
+    done
+
+    echo "All Logstash processes have completed."
 }
 
 migrate() {
@@ -651,6 +705,9 @@ migrate() {
         echo "Error while generating initial Data Views report"
         exit 1
     }
+
+    # Clean pid file
+    >"$LOGSTASH_DIR/pids"
 
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
