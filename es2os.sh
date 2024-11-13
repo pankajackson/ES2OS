@@ -283,6 +283,7 @@ run_logstash() {
         sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
         pid=$!                                                                                        # Capture the background process's PID
         echo "Logstash for data view $index started with PID $pid."
+        echo $pid >>"$LOGSTASH_DIR/pids" # Add PID in .pids file
 
         # Wait for the background process to finish
         wait $pid # This ensures we wait for Logstash to finish before continuing
@@ -291,12 +292,15 @@ run_logstash() {
         if [ $? -eq 0 ]; then
             echo "Data view $index processed successfully."
             update_indices_report "$uuid" "Done"
+            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 0
         else
             echo "Failed to process data view $index."
             update_indices_report "$uuid" "Failed"
+            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 1
         fi
+
     else
         echo "Logstash configuration for $index is invalid."
         update_indices_report "$uuid" "Failed"
@@ -645,7 +649,7 @@ process_dataview() {
     local sid=$(sanitize_name "$id")
     local indices_list_file="$INDICES_DIR/$sid.json"
 
-    # Max number of parallel processes
+    # Max number of parallel processes (example: 4)
     local max_parallel=2
     local count=0
 
@@ -658,25 +662,19 @@ process_dataview() {
             # Process the index in the background
             process_indices "$uuid" "$index" &
 
-            pid=$! # Capture the PID of the background process
-
-            # Store the PID in an array to wait for all processes later
-            pids+=("$pid")
-
             count=$((count + 1))
 
             # Check if we've reached the concurrency limit
             if [[ $count -ge $max_parallel ]]; then
                 # Wait for any of the running processes to finish before starting new ones
-                wait "${pids[0]}"     # Wait for the first process to finish
-                pids=("${pids[@]:1}") # Remove the first PID from the array
-                count=$((count - 1))  # Decrement the counter after waiting
+                wait -n
+                count=$((count - 1)) # Decrement the counter after waiting
             fi
         fi
     done
 
-    # Wait for all remaining background processes to finish
-    wait "${pids[@]}"
+    # Wait for any remaining Logstash processes to finish
+    wait
     echo "All Logstash processes have completed."
 }
 
