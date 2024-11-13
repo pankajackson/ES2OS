@@ -85,7 +85,7 @@ setup_variables() {
     BATCH_SIZE="${BATCH_SIZE:-2000}"
 
     # Set default JAVAOPTS
-    LS_JAVA_OPTS="${LS_JAVA_OPTS:--Xms1g -Xmx1g}"
+    LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
 
     # Determine curl flags based on DATAVIEW_API_INSECURE setting
     CURL_FLAGS=""

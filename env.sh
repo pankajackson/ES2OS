@@ -17,5 +17,5 @@ OS_SSL_CERT_VERIFY=false
 BATCH_SIZE=2000
 CONFIG_CLEANUP=false
 DEBUG=false
-LS_JAVA_OPTS="-Xms1g -Xmx1g"
+# LS_JAVA_OPTS="-Xms1g -Xmx1g"
 OUTPUT_DIR="./output_files"

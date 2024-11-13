@@ -120,7 +120,7 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`BATCH_SIZE`**: Docs count to transfter in a single batch (default: `2000`)
 - **`CONFIG_CLEANUP`**: Enable Logstash config cleanup (default: `false`)
 - **`DEBUG`**: Enable debug output (default: `false`)
-- **`LS_JAVA_OPTS`**: Environment variable that can override JVM settings in the jvm.options for logstash (default: `-Xms1g -Xmx1g`)
+- **`LS_JAVA_OPTS`**: Environment variable that can override JVM settings in the jvm.options for logstash (default: null)
 - **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
 
 ### Example `env.sh`:
