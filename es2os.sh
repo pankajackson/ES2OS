@@ -639,7 +639,7 @@ process_dataview() {
     local sid=$(sanitize_name "$id")
     local indices_list_file="$INDICES_DIR/$sid.json"
 
-    # Max number of parallel processes (example: 4)
+    # Max number of parallel processes
     local max_parallel=2
     local count=0
 
@@ -652,19 +652,25 @@ process_dataview() {
             # Process the index in the background
             process_indices "$uuid" "$index" &
 
+            pid=$! # Capture the PID of the background process
+
+            # Store the PID in an array to wait for all processes later
+            pids+=("$pid")
+
             count=$((count + 1))
 
             # Check if we've reached the concurrency limit
             if [[ $count -ge $max_parallel ]]; then
                 # Wait for any of the running processes to finish before starting new ones
-                wait -n
+                wait "${pids[0]}"     # Wait for the first process to finish
+                pids=("${pids[@]:1}") # Remove the first PID from the array
                 count=$((count - 1))  # Decrement the counter after waiting
             fi
         fi
     done
 
-    # Wait for any remaining Logstash processes to finish
-    wait
+    # Wait for all remaining background processes to finish
+    wait "${pids[@]}"
     echo "All Logstash processes have completed."
 }
 
