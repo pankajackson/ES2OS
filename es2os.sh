@@ -524,7 +524,7 @@ update_indices_report() {
     fi
 
     # Update Status based on UUID
-    awk -v uuid="$uuid" -v status="$status" '
+    awk -v uuid="$uuid" -v status=" $status" '
         BEGIN { FS = OFS = "," }          # Set field separator (FS) and output field separator (OFS) to comma
         NR == 1 { print; next }           # Print the header line as is
         $1 == uuid { $7 = status }        # If UUID matches, update the Status field (7th column)
