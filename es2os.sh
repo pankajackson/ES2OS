@@ -250,6 +250,18 @@ run_logstash() {
 generate_initial_indices_report() {
     local indices_file=$1
 
+    # Check if jq is installed
+    if ! command -v jq &>/dev/null; then
+        echo "Error: jq is required but not installed."
+        exit 1
+    fi
+
+    # Check if the indices file exists
+    if [[ ! -f "$indices_file" ]]; then
+        echo "Error: Indices file '$indices_file' not found."
+        exit 1
+    fi
+
     # Initialize the report file if it doesn't exist
     if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
         echo "uuid, sid, Index Pattern, Index, Start Time, Last Update, Status" >"$INDICES_REPORT_FILE"
@@ -257,22 +269,29 @@ generate_initial_indices_report() {
 
     # Extract the general information from the indices file
     sid=$(jq -r '.sid' "$indices_file")
-    data_view=$(jq -r '.["Data View"]' "$indices_file")
     index_pattern=$(jq -r '.["Index Pattern"]' "$indices_file")
 
     # Set current time for Start Time and Last Update
     current_time=$(date +"%Y-%m-%d %H:%M:%S")
 
-    # Iterate over each index entry within the indices array
-    jq -c '.indices[]' "$indices_file" | while read -r index; do
+    # Iterate over each index entry within the indices array and avoid multiple jq calls per index
+    jq -c '.indices[]' "$indices_file" | while IFS= read -r index; do
         uuid=$(echo "$index" | jq -r '.UUID')
         index_name=$(echo "$index" | jq -r '.["Index Name"]')
+
+        # Validate the extracted fields
+        if [[ -z "$uuid" || -z "$index_name" ]]; then
+            echo "Warning: Missing UUID or Index Name for an entry, skipping."
+            continue
+        fi
 
         # Check if the UUID is already in the report file to avoid duplicates
         if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
             echo "$uuid, $sid, $index_pattern, $index_name, $current_time, $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
+
+    echo "Initial indices report generated: $INDICES_REPORT_FILE"
 }
 
 fetch_indices() {
