@@ -138,6 +138,11 @@ get_dashboards() {
 logstash_cleanup() {
     local uuid=$1
     local index=$2
+
+    # Sanitize index for the config filename
+    local sanitized_index=$(sanitize_name "$index")
+    local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
+
     # Remove config if CONFIG_CLEANUP is true
     if [ "$CONFIG_CLEANUP" = true ]; then
         rm "$config_file"
