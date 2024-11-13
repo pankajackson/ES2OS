@@ -135,6 +135,15 @@ get_dashboards() {
 
 }
 
+logstash_cleanup() {
+    local uuid=$1
+    local index=$2
+    # Remove config if CONFIG_CLEANUP is true
+    if [ "$CONFIG_CLEANUP" = true ]; then
+        rm "$config_file"
+    fi
+}
+
 generate_logstash_config() {
     local uuid=$1
     local index=$2
@@ -223,19 +232,17 @@ run_logstash() {
         echo "Running Logstash for data view $index..."
         if sudo -E /usr/share/logstash/bin/logstash -f "$config_file"; then
             echo "Data view $index processed successfully."
-            update_report "$uuid" "Done"
+            update_indices_report "$uuid" "Done"
+            return 0
         else
             echo "Failed to process data view $index."
-            update_report "$uuid" "Failed"
+            update_indices_report "$uuid" "Failed"
+            return 1
         fi
     else
         echo "Logstash configuration for $index is invalid."
-        update_report "$uuid" "Failed"
-    fi
-
-    # Remove config if CONFIG_CLEANUP is true
-    if [ "$CONFIG_CLEANUP" = true ]; then
-        rm "$config_file"
+        update_indices_report "$uuid" "Failed"
+        return 1
     fi
 }
 
@@ -479,15 +486,20 @@ verify_dataview() {
 
 # Update or append status in the report file
 update_indices_report() {
-    local uuid=$1
-    local status=$2
+    local uuid="$1"
+    local status="$2"
+
+    if [[ -z "$uuid" || -z "$status" || ! -f "$INDICES_REPORT_FILE" ]]; then
+        echo "Error: UUID, status, or report file is missing."
+        return 1
+    fi
 
     # Update Status based on UUID
     awk -v uuid="$uuid" -v status="$status" '
-        BEGIN { FS = OFS = "," }        # Set field separator (FS) and output field separator (OFS) to comma
-        NR == 1 { print; next }         # Print the header line as is
-        $1 == uuid { $7 = status }      # If UUID matches, update the Status field (7th column)
-        { print }                       # Print all lines (modified or not)
+        BEGIN { FS = OFS = "," }          # Set field separator (FS) and output field separator (OFS) to comma
+        NR == 1 { print; next }           # Print the header line as is
+        $1 == uuid { $7 = status }        # If UUID matches, update the Status field (7th column)
+        { print }                         # Print all lines (modified or not)
     ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
 }
 
@@ -526,8 +538,12 @@ process_indices() {
     local uuid=$1
     local index=$2
 
+    update_indices_report "$uuid" "InProgress"
     generate_logstash_config $uuid $index
-    run_logstash $uuid $index
+    if ! run_logstash $uuid $index; then
+        return 1
+    fi
+    logstash_cleanup $uuid $index
 }
 
 process_dataview() {
@@ -541,112 +557,15 @@ process_dataview() {
     local indices_list_file="$INDICES_DIR/$sid.json"
 
     jq -c '.indices[]' "$indices_list_file" | while read -r row; do
-        uuid=$(echo "$row" | jq -r '.uuid')
+        uuid=$(echo "$row" | jq -r '.UUID')
         index=$(echo "$row" | jq -r '.["Index Name"]')
 
         if verify_indices "$uuid" "$index"; then
-            process_indices "$uuid" "$index"
+            if ! process_indices "$uuid" "$index"; then
+                return 1
+            fi
         fi
     done
-}
-
-# Process individual data view with Logstash
-process_dataview_old() {
-    local id=$1
-    local name=$2
-    local title=$3
-
-    echo "Processing data view: $name (Index Pattern: $title)"
-
-    # Sanitize title for the config filename
-    local sanitized_title=$(sanitize_name "$title")
-    local sid=$(sanitize_name "$id")
-    local config_file="$LOGSTASH_CONF_DIR/${sanitized_title}${sid}.conf"
-
-    # Generate Logstash configuration for the current data view
-    cat <<EOF >"$config_file"
-input {
-    elasticsearch {
-        hosts => ["${ES_ENDPOINT#https://}"]
-        user => "\${ES_USERNAME}"
-        ssl => $ES_SSL
-        password => "\${ES_PASSWORD}"
-        index => "$title,-.*"
-        query => '{ "query": { "query_string": { "query": "*" } } }'
-        scroll => "5m"
-        size => $BATCH_SIZE
-        docinfo => true
-        docinfo_target => "[@metadata][doc]"
-EOF
-
-    # Add ca_file only if ES_CA_FILE is set
-    if [ -n "$ES_CA_FILE" ]; then
-        echo "        ca_file => \"$ES_CA_FILE\"" >>"$config_file"
-    fi
-
-    # Close the input and start output section
-    cat <<EOF >>"$config_file"
-    }
-}
-output {
-EOF
-
-    # Add stdout output if DEBUG is true
-    if [ "$DEBUG" = true ]; then
-        echo "    stdout { codec => json }" >>"$config_file"
-    fi
-
-    # Continue with the standard output section
-    cat <<EOF >>"$config_file"
-    opensearch {
-        hosts => ["$OS_ENDPOINT"]
-        auth_type => {
-            type => 'basic'
-            user => "\${OS_USERNAME}"
-            password => "\${OS_PASSWORD}"
-        }
-        ssl => $OS_SSL
-        ssl_certificate_verification => $OS_SSL_CERT_VERIFY
-        index => "%{[@metadata][doc][_index]}"
-        document_id => "%{[@metadata][doc][_id]}"
-    }
-}
-EOF
-
-    echo "Logstash configuration for data view $name created as $config_file"
-
-    # Update report file status to "InProgress"
-    update_report "$id" "$name" "$title" "InProgress"
-
-    # Set environment variables for Logstash
-    export ES_USERNAME="$ES_USERNAME"
-    export ES_PASSWORD="$ES_PASSWORD"
-    export OS_USERNAME="$OS_USERNAME"
-    export OS_PASSWORD="$OS_PASSWORD"
-
-    # Test the Logstash configuration
-    echo "Testing Logstash configuration for $name..."
-    if sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --config.test_and_exit; then
-        echo "Logstash configuration for $name is valid."
-
-        # Run Logstash
-        echo "Running Logstash for data view $name..."
-        if sudo -E /usr/share/logstash/bin/logstash -f "$config_file"; then
-            echo "Data view $name processed successfully."
-            update_report "$id" "$name" "$title" "Done"
-        else
-            echo "Failed to process data view $name."
-            update_report "$id" "$name" "$title" "Failed"
-        fi
-    else
-        echo "Logstash configuration for $name is invalid."
-        update_report "$id" "$name" "$title" "Failed"
-    fi
-
-    # Remove config if CONFIG_CLEANUP is true
-    if [ "$CONFIG_CLEANUP" = true ]; then
-        rm "$config_file"
-    fi
 }
 
 migrate() {
@@ -662,7 +581,12 @@ migrate() {
         name=$(echo "$row" | jq -r '.name')
 
         if verify_dataview "$id" "$name" "$title"; then
-            process_dataview "$id" "$name" "$title"
+            update_report "$id" "$name" "$title" "InProgress"
+            if process_dataview "$id" "$name" "$title"; then
+                update_report "$id" "$name" "$title" "Done"
+            else
+                update_report "$id" "$name" "$title" "Failed"
+            fi
         fi
     done
 
