@@ -88,6 +88,12 @@ setup_variables() {
     # Set batch for data migration, 2000 is default
     BATCH_SIZE="${BATCH_SIZE:-2000}"
 
+    # Set concurrency, 2 is default
+    CONCURRENCY="${CONCURRENCY:-2}"
+    if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || [ "$CONCURRENCY" -lt 2 ]; then
+        CONCURRENCY=2
+    fi
+
     # Set default JAVAOPTS
     LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
 
@@ -650,7 +656,7 @@ process_dataview() {
     local indices_list_file="$INDICES_DIR/$sid.json"
 
     # Max number of parallel processes (example: 4)
-    local max_parallel=2
+    local max_parallel=$CONCURRENCY
     local count=0
 
     # Create a background process for each index
@@ -699,6 +705,9 @@ migrate() {
         echo "Error while generating initial Data Views report"
         exit 1
     }
+
+    # Clean pid file
+    >"$LOGSTASH_DIR/pids"
 
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
