@@ -269,7 +269,7 @@ generate_initial_indices_report() {
 
     # Initialize the report file if it doesn't exist
     if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
-        echo "uuid, sid, Index Pattern, Index, Start Time, Last Update, Status" >"$INDICES_REPORT_FILE"
+        echo "uuid, sid, Index Pattern, Index, Doc Count, Primary Data Size, Start Time, Last Update, Status" >"$INDICES_REPORT_FILE"
     fi
 
     # Extract the general information from the indices file
@@ -283,6 +283,8 @@ generate_initial_indices_report() {
     jq -c '.indices[]' "$indices_file" | while IFS= read -r index; do
         uuid=$(echo "$index" | jq -r '.UUID')
         index_name=$(echo "$index" | jq -r '.["Index Name"]')
+        doc_count=$(echo "$index" | jq -r '.["Doc Count"]')
+        primary_size=$(echo "$index" | jq -r '.["Primary Data Size"]')
 
         # Validate the extracted fields
         if [[ -z "$uuid" || -z "$index_name" ]]; then
@@ -292,7 +294,7 @@ generate_initial_indices_report() {
 
         # Check if the UUID is already in the report file to avoid duplicates
         if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
-            echo "$uuid, $sid, $index_pattern, $index_name, , $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
+            echo "$uuid, $sid, $index_pattern, $index_name, $doc_count, $primary_size, , $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
 
@@ -529,9 +531,9 @@ update_indices_report() {
         BEGIN { FS = OFS = ", " }                     # Set field separator (FS) and output field separator (OFS) to comma
         NR == 1 { print; next }                      # Print the header line as is
         $1 == uuid {                                 # Check if UUID matches
-            $7 = status                              # Update the Status field (7th column)
-            $6 = current_time                        # Always update Last Update field (6th column)
-            if ($5 == "") $5 = current_time          # Update Start Time (5th column) only if it is empty
+            $9 = status                              # Update the Status field (7th column)
+            $8 = current_time                        # Always update Last Update field (6th column)
+            if ($7 == "") $7 = current_time          # Update Start Time (5th column) only if it is empty
         }
         { print }                                    # Print all lines (modified or not)
     ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
@@ -552,8 +554,8 @@ verify_indices() {
     fi
 
     # Skip system indexes if configured to do so
-    if [[ "$IGNORE_SYSTEM_INDEXES" = true && "$title" == .* ]]; then
-        echo "Ignoring system index: $title"
+    if [[ "$IGNORE_SYSTEM_INDEXES" = true && "$index" == .* ]]; then
+        echo "Ignoring system index: $index"
         update_indices_report "$uuid" "Skipped"
         return 1
     fi
