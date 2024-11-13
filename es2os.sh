@@ -595,8 +595,15 @@ process_dataview() {
 migrate() {
     echo "Starting data migration..."
 
-    fetch_dataviews
-    generate_initial_report
+    # Fetch data views and generate initial report, with exit on failure
+    fetch_dataviews || {
+        echo "Error while fetching Data Views"
+        exit 1
+    }
+    generate_initial_report || {
+        echo "Error while generating initial Data Views report"
+        exit 1
+    }
 
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
@@ -604,15 +611,24 @@ migrate() {
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
 
+        echo "Processing Data View: $title (ID: $id, Name: $name)"
+
+        # Verify the data view before processing
         if verify_dataview "$id" "$name" "$title"; then
             update_report "$id" "$name" "$title" "InProgress"
+
+            # Process data view and update status based on success/failure
             if process_dataview "$id" "$name" "$title"; then
                 update_report "$id" "$name" "$title" "Done"
+                echo "Data View '$title' migration completed successfully."
             else
                 update_report "$id" "$name" "$title" "Failed"
+                echo "Error: Data View '$title' migration failed."
             fi
+        else
+            echo "Skipping Data View '$title': Verification failed."
         fi
-    done
+    done || exit 1 # Ensures the loop exits if a command inside it fails
 
     echo "Data migration complete."
 }
