@@ -69,8 +69,12 @@ setup_variables() {
     mkdir -p "$INDICES_DIR"
     INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report.csv"
 
-    LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash"
+    LOGSTASH_DIR="$OUTPUT_DIR/logstash"
+    mkdir -p "$LOGSTASH_DIR"
+    LOGSTASH_CONF_DIR="$OUTPUT_DIR/logstash/conf"
     mkdir -p "$LOGSTASH_CONF_DIR"
+    LOGSTASH_DATA_DIR="$OUTPUT_DIR/logstash/data"
+    mkdir -p "$LOGSTASH_DATA_DIR"
 
     DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
     mkdir -p "$DASHBOARD_DIR"
@@ -176,10 +180,12 @@ logstash_cleanup() {
     # Sanitize index for the config filename
     local sanitized_index=$(sanitize_name "$index")
     local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
+    local logstash_data_dir="$LOGSTASH_DATA_DIR/$uuid"
 
     # Remove config if CONFIG_CLEANUP is true
     if [ "$CONFIG_CLEANUP" = true ]; then
         rm "$config_file"
+        rm -rf $logstash_data_dir
     fi
 }
 
@@ -254,7 +260,7 @@ run_logstash() {
     local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
 
     # Create a unique path.data directory for each instance of Logstash
-    local logstash_data_dir="/tmp/logstash_instance_$uuid"
+    local logstash_data_dir="$LOGSTASH_DATA_DIR/$uuid"
     mkdir -p "$logstash_data_dir" # Create the directory if it doesn't exist
 
     # Update report file status to "InProgress"
