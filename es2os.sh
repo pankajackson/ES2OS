@@ -279,10 +279,10 @@ run_logstash() {
         echo "Logstash configuration for $index is valid."
 
         # Run Logstash in the background with the unique path.data
-        echo "Running Logstash for data view $index..."
+        echo "Running Logstash for index $index..."
         sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
         pid=$!                                                                                        # Capture the background process's PID
-        echo "Logstash for data view $index started with PID $pid."
+        echo "Logstash for index $index started with PID $pid."
         echo $pid >>"$LOGSTASH_DIR/pids" # Add PID in .pids file
 
         # Wait for the background process to finish
@@ -290,12 +290,12 @@ run_logstash() {
 
         # Check if Logstash succeeded or failed
         if [ $? -eq 0 ]; then
-            echo "Data view $index processed successfully."
+            echo "Index $index processed successfully."
             update_indices_report "$uuid" "Done"
             sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 0
         else
-            echo "Failed to process data view $index."
+            echo "Failed to process Index $index."
             update_indices_report "$uuid" "Failed"
             sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 1
@@ -673,8 +673,17 @@ process_dataview() {
         fi
     done
 
-    # Wait for any remaining Logstash processes to finish
-    wait
+    # Wait for running processes
+    while [ -s "$LOGSTASH_DIR/pids" ]; do
+        # Iterate through each PID in the .pids file
+        while read -r pid; do
+            # echo "Process $pid is still running."
+            continue
+
+        done <"$LOGSTASH_DIR/pids"
+        sleep 2
+    done
+
     echo "All Logstash processes have completed."
 }
 
