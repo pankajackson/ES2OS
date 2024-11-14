@@ -121,6 +121,7 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`CONCURRENCY`**: The number of parallel Logstash instances to process indices. Defaults to `2` and has a minimum value of `2` even if a lower or invalid value is set.
 - **`CONFIG_CLEANUP`**: Enable Logstash config cleanup (default: `false`)
 - **`DEBUG`**: Enable debug output (default: `false`)
+- **`EXCLUDE_PATTERNS`**: Comma-separated list of index patterns to exclude from migration (default: none)
 - **`LS_JAVA_OPTS`**: Environment variable that can override JVM settings in the jvm.options for logstash (default: null)
 - **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
 
