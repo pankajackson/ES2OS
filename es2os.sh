@@ -702,19 +702,24 @@ process_dataview() {
     jq -c '.indices[]' "$indices_list_file" | while read -r row; do
         uuid=$(echo "$row" | jq -r '.UUID')
         index=$(echo "$row" | jq -r '.["Index Name"]')
+        index_status=$(echo "$row" | jq -r '.["Index Status"]')
 
-        if verify_indices "$uuid" "$index"; then
-            # Process the index in the background
-            process_indices "$uuid" "$index" &
+        if [[ "$index_status" == "open" ]]; then
+            if verify_indices "$uuid" "$index"; then
+                # Process the index in the background
+                process_indices "$uuid" "$index" &
 
-            count=$((count + 1))
+                count=$((count + 1))
 
-            # Check if we've reached the concurrency limit
-            if [[ $count -ge $max_parallel ]]; then
-                # Wait for any of the running processes to finish before starting new ones
-                wait -n
-                count=$((count - 1)) # Decrement the counter after waiting
+                # Check if we've reached the concurrency limit
+                if [[ $count -ge $max_parallel ]]; then
+                    # Wait for any of the running processes to finish before starting new ones
+                    wait -n
+                    count=$((count - 1)) # Decrement the counter after waiting
+                fi
             fi
+        else
+            update_indices_report "$uuid" "Closed"
         fi
     done
 
