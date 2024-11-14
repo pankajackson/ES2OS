@@ -12,7 +12,7 @@ This project is a Bash script for migrating data views from Elasticsearch to Ope
   - [Usage](#usage)
   - [Configuration](#configuration)
     - [Configurable Variables in `env.sh`](#configurable-variables-in-envsh)
-    - [Example `env.sh`:](#example-envsh)
+    - [Example `env.sh`](#example-envsh)
     - [Other Configurable Settings in `es2os.sh`](#other-configurable-settings-in-es2ossh)
   - [File Structure](#file-structure)
   - [Notes](#notes)
@@ -125,7 +125,7 @@ To set up environment-specific values, create an `env.sh` file in the root direc
 - **`LS_JAVA_OPTS`**: Environment variable that can override JVM settings in the jvm.options for logstash (default: null)
 - **`OUTPUT_DIR`**: Directory to store output files (default: `./output_files`)
 
-### Example `env.sh`:
+### Example `env.sh`
 
 ```bash
 ES_HOST="https://your-elasticsearch-host:9200"
