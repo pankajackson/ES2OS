@@ -144,13 +144,21 @@ monitor_jvm() {
 }
 
 stop_all_processes() {
-    # Kill all processes listed in the .pids file
     if [ -f "$LOGSTASH_DIR/pids" ]; then
-        while read -r pid; do
+        while read -r pid uuid; do
             kill "$pid" 2>/dev/null
-            echo "Stopped process with PID $pid."
+            sleep 1
+            if pgrep -x -P "$pid" >/dev/null; then
+                echo "Failed to terminate process with PID $pid for UUID $uuid."
+            else
+                echo "Process with PID $pid for UUID $uuid terminated successfully."
+                if [[ -n "$uuid" ]]; then
+                    update_indices_report "$uuid" "Stopped"
+                fi
+                sed -i "/^$pid $uuid$/d" "$LOGSTASH_DIR/pids"
+            fi
+
         done <"$LOGSTASH_DIR/pids"
-        rm -f "$LOGSTASH_DIR/pids" # Remove the .pids file
     fi
 }
 
@@ -300,7 +308,7 @@ run_logstash() {
         sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
         pid=$!                                                                                        # Capture the background process's PID
         echo "Logstash for index $index started with PID $pid."
-        echo $pid >>"$LOGSTASH_DIR/pids" # Add PID in .pids file
+        echo "$pid $uuid" >>"$LOGSTASH_DIR/pids" # Store UUID and PID in pids file
 
         # Wait for the background process to finish
         wait $pid # This ensures we wait for Logstash to finish before continuing
@@ -309,12 +317,12 @@ run_logstash() {
         if [ $? -eq 0 ]; then
             echo "Index $index processed successfully."
             update_indices_report "$uuid" "Done"
-            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
+            sed -i "/$pid $uuid/d" "$LOGSTASH_DIR/pids" # Remove the entry from pids after completion
             return 0
         else
             echo "Failed to process Index $index."
             update_indices_report "$uuid" "Failed"
-            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
+            sed -i "/$pid $uuid/d" "$LOGSTASH_DIR/pids" # Remove the entry from pids after completion
             return 1
         fi
     else
@@ -696,10 +704,6 @@ process_dataview() {
 
     # Wait for running processes
     while [ -s "$LOGSTASH_DIR/pids" ]; do
-        # Iterate through each PID in the .pids file
-        while read -r pid; do
-            continue
-        done <"$LOGSTASH_DIR/pids"
         sleep 2
     done
 
