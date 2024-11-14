@@ -628,7 +628,7 @@ verify_indices() {
     local index=$2
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f7 | tr -d ' ')
+    local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f9 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
