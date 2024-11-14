@@ -143,6 +143,17 @@ monitor_jvm() {
     set -e
 }
 
+stop_all_processes() {
+    # Kill all processes listed in the .pids file
+    if [ -f "$LOGSTASH_DIR/pids" ]; then
+        while read -r pid; do
+            kill "$pid" 2>/dev/null
+            echo "Stopped process with PID $pid."
+        done <"$LOGSTASH_DIR/pids"
+        rm -f "$LOGSTASH_DIR/pids" # Remove the .pids file
+    fi
+}
+
 # Fetch data views from API and save to file
 get_dashboards() {
     echo "Fetching data views from $KB_ENDPOINT..."
@@ -306,7 +317,6 @@ run_logstash() {
             sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
             return 1
         fi
-
     else
         echo "Logstash configuration for $index is invalid."
         update_indices_report "$uuid" "Failed"
@@ -661,6 +671,9 @@ process_dataview() {
     local max_parallel=$CONCURRENCY
     local count=0
 
+    # Trap to handle Ctrl+C and stop all background Logstash processes
+    trap 'echo "Interrupt received, stopping all background processes..."; stop_all_processes; exit 1' SIGINT
+
     # Create a background process for each index
     jq -c '.indices[]' "$indices_list_file" | while read -r row; do
         uuid=$(echo "$row" | jq -r '.UUID')
@@ -685,14 +698,13 @@ process_dataview() {
     while [ -s "$LOGSTASH_DIR/pids" ]; do
         # Iterate through each PID in the .pids file
         while read -r pid; do
-            # echo "Process $pid is still running."
             continue
-
         done <"$LOGSTASH_DIR/pids"
         sleep 2
     done
 
     echo "All Logstash processes have completed."
+    trap - SIGINT # Reset the trap after processes are complete
 }
 
 migrate() {
