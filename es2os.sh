@@ -94,6 +94,9 @@ setup_variables() {
         CONCURRENCY=2
     fi
 
+    # Set indices pattern to exclude, default is none
+    EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-}"
+
     # Set default JAVAOPTS
     LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
 
@@ -141,6 +144,25 @@ monitor_jvm() {
 
     # Restore `set -e` to its previous state
     set -e
+}
+
+stop_all_processes() {
+    if [ -f "$LOGSTASH_DIR/pids" ]; then
+        while read -r pid uuid; do
+            kill "$pid" 2>/dev/null
+            sleep 1
+            if pgrep -x -P "$pid" >/dev/null; then
+                echo "Failed to terminate process with PID $pid for UUID $uuid."
+            else
+                echo "Process with PID $pid for UUID $uuid terminated successfully."
+                if [[ -n "$uuid" ]]; then
+                    update_indices_report "$uuid" "Stopped"
+                fi
+                sed -i "/^$pid $uuid$/d" "$LOGSTASH_DIR/pids"
+            fi
+
+        done <"$LOGSTASH_DIR/pids"
+    fi
 }
 
 # Fetch data views from API and save to file
@@ -289,7 +311,7 @@ run_logstash() {
         sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
         pid=$!                                                                                        # Capture the background process's PID
         echo "Logstash for index $index started with PID $pid."
-        echo $pid >>"$LOGSTASH_DIR/pids" # Add PID in .pids file
+        echo "$pid $uuid" >>"$LOGSTASH_DIR/pids" # Store UUID and PID in pids file
 
         # Wait for the background process to finish
         wait $pid # This ensures we wait for Logstash to finish before continuing
@@ -298,15 +320,14 @@ run_logstash() {
         if [ $? -eq 0 ]; then
             echo "Index $index processed successfully."
             update_indices_report "$uuid" "Done"
-            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
+            sed -i "/$pid $uuid/d" "$LOGSTASH_DIR/pids" # Remove the entry from pids after completion
             return 0
         else
             echo "Failed to process Index $index."
             update_indices_report "$uuid" "Failed"
-            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
+            sed -i "/$pid $uuid/d" "$LOGSTASH_DIR/pids" # Remove the entry from pids after completion
             return 1
         fi
-
     else
         echo "Logstash configuration for $index is invalid."
         update_indices_report "$uuid" "Failed"
@@ -317,6 +338,8 @@ run_logstash() {
 # Initialize report file with all indices marked as UnProcessed
 generate_initial_indices_report() {
     local indices_file=$1
+
+    echo "Generating initial report for $indices_file"
 
     # Check if jq is installed
     if ! command -v jq &>/dev/null; then
@@ -477,13 +500,13 @@ fetch_indices() {
                "Store Size": $store_size
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
-        # Generate Initial Indices Report
-        if ! generate_initial_indices_report "$indices_json_file"; then
-            echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
-            exit 1
-        fi
-
     done <<<"$raw_indices_list"
+
+    # Generate Initial Indices Report
+    if ! generate_initial_indices_report "$indices_json_file"; then
+        echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
+        exit 1
+    fi
 
     echo "Indices details for data view $title saved to $indices_json_file"
 }
@@ -606,9 +629,13 @@ update_indices_report() {
 verify_indices() {
     local uuid=$1
     local index=$2
+    local original_ifs="$IFS"
+    local normalized_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
+    IFS=',' read -r -a patterns <<<"$normalized_patterns"
+    IFS="$original_ifs" # Restore the original IFS value
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f7 | tr -d ' ')
+    local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f9 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
@@ -622,6 +649,15 @@ verify_indices() {
         update_indices_report "$uuid" "Skipped"
         return 1
     fi
+
+    # Check if the index matches any exclude pattern
+    for pattern in "${patterns[@]}"; do
+        if [[ "$index" == $pattern ]]; then
+            echo "Excluding index: $index"
+            update_indices_report "$uuid" "Excluded"
+            return 1
+        fi
+    done
 
     # Check if the index exists
     if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$index" | grep -q "200"; then
@@ -659,38 +695,41 @@ process_dataview() {
     local max_parallel=$CONCURRENCY
     local count=0
 
+    # Trap to handle Ctrl+C and stop all background Logstash processes
+    trap 'echo "Interrupt received, stopping all background processes..."; stop_all_processes; exit 1' SIGINT
+
     # Create a background process for each index
     jq -c '.indices[]' "$indices_list_file" | while read -r row; do
         uuid=$(echo "$row" | jq -r '.UUID')
         index=$(echo "$row" | jq -r '.["Index Name"]')
+        index_status=$(echo "$row" | jq -r '.["Index Status"]')
 
-        if verify_indices "$uuid" "$index"; then
-            # Process the index in the background
-            process_indices "$uuid" "$index" &
+        if [[ "$index_status" == "open" ]]; then
+            if verify_indices "$uuid" "$index"; then
+                # Process the index in the background
+                process_indices "$uuid" "$index" &
 
-            count=$((count + 1))
+                count=$((count + 1))
 
-            # Check if we've reached the concurrency limit
-            if [[ $count -ge $max_parallel ]]; then
-                # Wait for any of the running processes to finish before starting new ones
-                wait -n
-                count=$((count - 1)) # Decrement the counter after waiting
+                # Check if we've reached the concurrency limit
+                if [[ $count -ge $max_parallel ]]; then
+                    # Wait for any of the running processes to finish before starting new ones
+                    wait -n
+                    count=$((count - 1)) # Decrement the counter after waiting
+                fi
             fi
+        else
+            update_indices_report "$uuid" "Closed"
         fi
     done
 
     # Wait for running processes
     while [ -s "$LOGSTASH_DIR/pids" ]; do
-        # Iterate through each PID in the .pids file
-        while read -r pid; do
-            # echo "Process $pid is still running."
-            continue
-
-        done <"$LOGSTASH_DIR/pids"
         sleep 2
     done
 
     echo "All Logstash processes have completed."
+    trap - SIGINT # Reset the trap after processes are complete
 }
 
 migrate() {
