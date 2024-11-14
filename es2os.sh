@@ -94,6 +94,9 @@ setup_variables() {
         CONCURRENCY=2
     fi
 
+    # Set indices pattern to exclude, default is none
+    EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-}"
+
     # Set default JAVAOPTS
     LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
 
@@ -626,6 +629,9 @@ update_indices_report() {
 verify_indices() {
     local uuid=$1
     local index=$2
+    local original_ifs="$IFS"
+    IFS=',' read -r -a patterns <<<"$EXCLUDE_PATTERNS"
+    IFS="$original_ifs" # Restore the original IFS value
 
     # Check the report file for the current data view's status
     local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f9 | tr -d ' ')
@@ -642,6 +648,15 @@ verify_indices() {
         update_indices_report "$uuid" "Skipped"
         return 1
     fi
+
+    # Check if the index matches any exclude pattern
+    for pattern in "${patterns[@]}"; do
+        if [[ "$index" == $pattern ]]; then
+            echo "Excluding index: $index"
+            update_indices_report "$uuid" "Excluded"
+            return 1
+        fi
+    done
 
     # Check if the index exists
     if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$index" | grep -q "200"; then
