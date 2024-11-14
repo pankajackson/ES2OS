@@ -143,6 +143,25 @@ monitor_jvm() {
     set -e
 }
 
+stop_all_processes() {
+    if [ -f "$LOGSTASH_DIR/pids" ]; then
+        while read -r pid uuid; do
+            kill "$pid" 2>/dev/null
+            sleep 1
+            if pgrep -x -P "$pid" >/dev/null; then
+                echo "Failed to terminate process with PID $pid for UUID $uuid."
+            else
+                echo "Process with PID $pid for UUID $uuid terminated successfully."
+                if [[ -n "$uuid" ]]; then
+                    update_indices_report "$uuid" "Stopped"
+                fi
+                sed -i "/^$pid $uuid$/d" "$LOGSTASH_DIR/pids"
+            fi
+
+        done <"$LOGSTASH_DIR/pids"
+    fi
+}
+
 # Fetch data views from API and save to file
 get_dashboards() {
     echo "Fetching data views from $KB_ENDPOINT..."
@@ -289,7 +308,7 @@ run_logstash() {
         sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
         pid=$!                                                                                        # Capture the background process's PID
         echo "Logstash for index $index started with PID $pid."
-        echo $pid >>"$LOGSTASH_DIR/pids" # Add PID in .pids file
+        echo "$pid $uuid" >>"$LOGSTASH_DIR/pids" # Store UUID and PID in pids file
 
         # Wait for the background process to finish
         wait $pid # This ensures we wait for Logstash to finish before continuing
@@ -298,15 +317,14 @@ run_logstash() {
         if [ $? -eq 0 ]; then
             echo "Index $index processed successfully."
             update_indices_report "$uuid" "Done"
-            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
+            sed -i "/$pid $uuid/d" "$LOGSTASH_DIR/pids" # Remove the entry from pids after completion
             return 0
         else
             echo "Failed to process Index $index."
             update_indices_report "$uuid" "Failed"
-            sed -i "/$pid/d" "$LOGSTASH_DIR/pids" # Remove the PID from .pids after completion
+            sed -i "/$pid $uuid/d" "$LOGSTASH_DIR/pids" # Remove the entry from pids after completion
             return 1
         fi
-
     else
         echo "Logstash configuration for $index is invalid."
         update_indices_report "$uuid" "Failed"
@@ -661,6 +679,9 @@ process_dataview() {
     local max_parallel=$CONCURRENCY
     local count=0
 
+    # Trap to handle Ctrl+C and stop all background Logstash processes
+    trap 'echo "Interrupt received, stopping all background processes..."; stop_all_processes; exit 1' SIGINT
+
     # Create a background process for each index
     jq -c '.indices[]' "$indices_list_file" | while read -r row; do
         uuid=$(echo "$row" | jq -r '.UUID')
@@ -683,16 +704,11 @@ process_dataview() {
 
     # Wait for running processes
     while [ -s "$LOGSTASH_DIR/pids" ]; do
-        # Iterate through each PID in the .pids file
-        while read -r pid; do
-            # echo "Process $pid is still running."
-            continue
-
-        done <"$LOGSTASH_DIR/pids"
         sleep 2
     done
 
     echo "All Logstash processes have completed."
+    trap - SIGINT # Reset the trap after processes are complete
 }
 
 migrate() {
