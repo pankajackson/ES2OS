@@ -630,7 +630,8 @@ verify_indices() {
     local uuid=$1
     local index=$2
     local original_ifs="$IFS"
-    IFS=',' read -r -a patterns <<<"$EXCLUDE_PATTERNS"
+    local normalized_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
+    IFS=',' read -r -a patterns <<<"$normalized_patterns"
     IFS="$original_ifs" # Restore the original IFS value
 
     # Check the report file for the current data view's status
