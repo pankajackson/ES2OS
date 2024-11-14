@@ -318,6 +318,8 @@ run_logstash() {
 generate_initial_indices_report() {
     local indices_file=$1
 
+    echo "Generating initial report for $indices_file"
+
     # Check if jq is installed
     if ! command -v jq &>/dev/null; then
         echo "Error: jq is required but not installed."
@@ -477,13 +479,13 @@ fetch_indices() {
                "Store Size": $store_size
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
-        # Generate Initial Indices Report
-        if ! generate_initial_indices_report "$indices_json_file"; then
-            echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
-            exit 1
-        fi
-
     done <<<"$raw_indices_list"
+
+    # Generate Initial Indices Report
+    if ! generate_initial_indices_report "$indices_json_file"; then
+        echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
+        exit 1
+    fi
 
     echo "Indices details for data view $title saved to $indices_json_file"
 }
