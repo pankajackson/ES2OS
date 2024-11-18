@@ -152,86 +152,80 @@ status() {
     # Temporarily disable `set -e` for this function
     set +e
 
-    # Get the list of Logstash processes with active network connections
     local LOGSTASH_PIDS
     LOGSTASH_PIDS=$(get_logstash_processes)
     if [ $? -ne 0 ]; then
         echo "No Logstash processes found."
-        # Exit if no valid PIDs were found
         return
     fi
 
-    # Monitor each Logstash process
+    if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+        echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
+        return
+    fi
+
+    echo "============================"
+
     for PID in $LOGSTASH_PIDS; do
-        echo "Monitoring PID: $PID"
+        echo "Logstash Instance:"
+        echo "PID: $PID"
+        echo "----------------------------"
 
-        # Extract Logstash Port
-        PORT=$(sudo netstat -nptul | grep "$PID" | awk '{print $4}' | awk -F ':' '{print $2}')
-        echo "Logstash Port: $PORT"
+        PORT=$(sudo netstat -nptul | awk -v pid="$PID" '$0 ~ pid {split($4, a, ":"); print a[2]}')
+        echo "Port: ${PORT:-Unavailable}"
 
-        # Extract the value of -f (configuration file path)
-        CONFIG_FILE=$(sudo ps -aux | grep "$PID" | awk -F ' -f ' '{print $2}' | awk '{print $1}' | xargs)
+        CONFIG_FILE=$(sudo ps -aux | awk -v pid="$PID" '$2 == pid {split($0, a, "-f "); split(a[2], b, " "); print b[1]}')
+        echo "Config File: ${CONFIG_FILE:-Unavailable}"
 
-        # Extract the value of --path.data
-        PATH_DATA=$(sudo ps -aux | grep "$PID" | awk -F'--path.data=' '{print $2}' | awk '{print $1}')
+        PATH_DATA=$(sudo ps -aux | awk -v pid="$PID" '$2 == pid {split($0, a, "--path.data="); split(a[2], b, " "); print b[1]}')
+        echo "Data Path: ${PATH_DATA:-Unavailable}"
 
-        if [[ -z "$PATH_DATA" ]]; then
-            echo "Error: PATH_DATA is empty or not set"
-        else
+        if [[ -n "$PATH_DATA" ]]; then
             INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
-            echo "Indices UUID: $INDICES_UUID"
-            INDICES_NAME=$(cat $INDICES_REPORT_FILE | grep $INDICES_UUID | awk -F ',' '{ print $4 }' | xargs)
-            INDICES_DOCS=$(cat $INDICES_REPORT_FILE | grep $INDICES_UUID | awk -F ',' '{ print $5 }' | xargs)
-            INDICES_SIZE=$(cat $INDICES_REPORT_FILE | grep $INDICES_UUID | awk -F ',' '{ print $6 }' | xargs)
-            echo "Indices Name: $INDICES_NAME"
-            echo "Indices Size: $INDICES_SIZE"
+            INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
+            INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
+            INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
+            echo "Index Info:"
+            echo "  UUID: $INDICES_UUID"
+            echo "  Name: ${INDICES_NAME:-Unknown}"
+            echo "  Docs: ${INDICES_DOCS:-Unknown}"
+            echo "  Size: ${INDICES_SIZE:-Unknown}"
         fi
 
-        # Extract Pipeline Status
         ls_endpoint="http://localhost:$PORT"
-        PIPELINE_STATE=$(curl -s $ls_endpoint/_node/stats/pipelines)
+        PIPELINE_STATE=$(curl -s "$ls_endpoint/_node/stats/pipelines")
         if [[ -z "$PIPELINE_STATE" ]]; then
             echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
         else
+            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
+            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
+            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
 
-            # Extract Metrics
-            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status)
-            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis)
-            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out)
-            # Validate Data
-            if [[ -z "$PIPELINE_STATUS" || -z "$PIPELINE_DIM" || -z "$PIPELINE_OUT" ]]; then
-                echo "Error: Missing data in the pipeline stats"
+            if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
+                PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
             else
-                # Calculate Event Rate
-                if [[ "$PIPELINE_DIM" -gt 0 ]]; then
-                    PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
-                else
-                    PIPELINE_RATE=0
-                fi
+                PIPELINE_RATE=0
             fi
+
+            echo "Pipeline Info:"
+            echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
+            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0}"
+            echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
         fi
 
-        # Output Results
-        echo "Pipeline Status: $PIPELINE_STATUS"
-        echo "Pipeline Out: $PIPELINE_OUT / $INDICES_DOCS"
-        echo "Pipeline Rate: $PIPELINE_RATE events/sec"
-
-        # Run jstat command, suppress errors, and calculate heap usage
         sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
-            tail -n 1 |
             awk '{
-                used_heap = $3 + $4 + $6 + $8      # Sum of used space in Survivor, Eden, and Old generations
-                total_heap = $5 + $7 + $9          # Sum of capacities of Survivor, Eden, and Old generations
-                available_heap = total_heap - used_heap
-                # printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
-                printf "Logstash Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
+                used_heap = $3 + $4 + $6 + $8
+                total_heap = $5 + $7 + $9
+                printf "Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
             }'
 
-        echo "Logstash Conf: $CONFIG_FILE"
-        echo "Logstash Data Path: $PATH_DATA"
+        echo "----------------------------"
     done
 
-    # Restore `set -e` to its previous state
+    echo "End of Logstash Instance"
+    echo "============================"
+
     set -e
 }
 
