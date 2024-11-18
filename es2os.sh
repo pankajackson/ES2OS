@@ -79,6 +79,9 @@ setup_variables() {
     DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
     mkdir -p "$DASHBOARD_DIR"
 
+    LOGS_DIR="$OUTPUT_DIR/logs"
+    mkdir -p "$LOGS_DIR"
+
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
 
@@ -795,7 +798,17 @@ main() {
         get_dashboards
         ;;
     migrate)
-        migrate
+        log_file="$LOGS_DIR/$(date '+%Y-%m-%d-%H-%M-%S').log"
+        current_log="$LOGS_DIR/current.log"
+        echo "Starting migration in the background. Logs will be saved to $log_file and $current_log."
+
+        # Clear the current log to avoid appending old logs
+        >"$current_log"
+        {
+            migrate
+        } 2>&1 | tee -a "$log_file" "$current_log" >/dev/null &
+        # } >>"$log_file" 2>&1 &
+        disown # Detach the background process from the terminal
         ;;
     *)
         echo "Invalid command. Usage: $0 {setup|migrate|getdashboards}"
