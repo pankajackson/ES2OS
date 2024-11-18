@@ -118,37 +118,83 @@ sanitize_name() {
     echo "$sanitized"
 }
 
-monitor_jvm() {
+# Function to get Logstash PIDs with active network connections
+get_logstash_processes() {
+    # Get all Logstash PIDs
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
+
+    # Check if no Logstash processes are found
+    if [ -z "$LOGSTASH_PIDS" ]; then
+        return 1 # Indicate failure
+    fi
+
+    # Filter PIDs to include only those with network activity
+    local FILTERED_PIDS=()
+    for PID in $LOGSTASH_PIDS; do
+        if sudo netstat -nptul | grep -q "$PID"; then
+            FILTERED_PIDS+=("$PID")
+        fi
+    done
+
+    # Check if no filtered PIDs remain
+    if [ ${#FILTERED_PIDS[@]} -eq 0 ]; then
+        return 1 # Indicate failure
+    fi
+
+    # return filtered PIDs as a space-separated string
+    echo "${FILTERED_PIDS[@]}"
+    return 0 # Indicate success
+}
+
+# Monitoring function
+status() {
     # Temporarily disable `set -e` for this function
     set +e
 
-    # Get all the Logstash PIDs once
-    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
-
-    if [ -z "$LOGSTASH_PIDS" ]; then
+    # Get the list of Logstash processes with active network connections
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(get_logstash_processes)
+    if [ $? -ne 0 ]; then
         echo "No Logstash processes found."
-    else
-        for PID in $LOGSTASH_PIDS; do
-            echo "Monitoring PID: $PID"
-            # Run jstat command, suppress errors, and calculate heap usage
-            sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
-                tail -n 1 |
-                awk '{
-                # Column indexes may vary; typical indexes for jstat -gc output:
-                # S0U (Survivor 0 Used), S1U (Survivor 1 Used), EU (Eden Used), OU (Old Used), MU (Metaspace Used)
-                # S0C, S1C, EC, OC, MC represent capacities of these respective memory pools
+        # Exit if no valid PIDs were found
+        return
+    fi
+
+    # Monitor each Logstash process
+    for PID in $LOGSTASH_PIDS; do
+        echo "Monitoring PID: $PID"
+
+        # Extract Logstash Port
+        PORT=$(sudo netstat -nptul | grep "$PID" | awk '{print $4}' | awk -F ':' '{print $2}')
+
+        # Extract the value of -f (configuration file path)
+        CONFIG_FILE=$(sudo ps -aux | grep "$PID" | awk -F ' -f ' '{print $2}' | awk '{print $1}' | xargs)
+
+        # Extract the value of --path.data
+        PATH_DATA=$(sudo ps -aux | grep "$PID" | awk -F'--path.data=' '{print $2}' | awk '{print $1}')
+
+        # Run jstat command, suppress errors, and calculate heap usage
+        sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
+            tail -n 1 |
+            awk '{
                 used_heap = $3 + $4 + $6 + $8      # Sum of used space in Survivor, Eden, and Old generations
                 total_heap = $5 + $7 + $9          # Sum of capacities of Survivor, Eden, and Old generations
                 available_heap = total_heap - used_heap
-                printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
+                # printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
+                printf "Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
             }'
-        done
-    fi
+
+        echo "Logstash Port: $PORT"
+        echo "Configuration File: $CONFIG_FILE"
+        echo "Data Path: $PATH_DATA"
+    done
 
     # Restore `set -e` to its previous state
     set -e
 }
 
+# TODO: grep processes using netstat and kill them, also use sudo to kill
 stop_all_processes() {
     if [ -f "$LOGSTASH_DIR/pids" ]; then
         while read -r pid uuid; do
@@ -805,8 +851,8 @@ main() {
     setup)
         setup
         ;;
-    monitorjvm)
-        monitor_jvm
+    status)
+        status
         ;;
     getdashboards)
         get_dashboards
