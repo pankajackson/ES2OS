@@ -159,11 +159,6 @@ status() {
         return
     fi
 
-    if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
-        echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
-        return
-    fi
-
     echo "============================"
 
     for PID in $LOGSTASH_PIDS; do
@@ -181,15 +176,20 @@ status() {
         echo "Data Path: ${PATH_DATA:-Unavailable}"
 
         if [[ -n "$PATH_DATA" ]]; then
-            INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
-            INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
-            INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
-            INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
-            echo "Index Info:"
-            echo "  UUID: $INDICES_UUID"
-            echo "  Name: ${INDICES_NAME:-Unknown}"
-            echo "  Docs: ${INDICES_DOCS:-Unknown}"
-            echo "  Size: ${INDICES_SIZE:-Unknown}"
+            if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+                echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
+            else
+                INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
+                INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
+                INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
+                INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
+
+                echo "Index Info:"
+                echo "  UUID: $INDICES_UUID"
+                echo "  Name: ${INDICES_NAME:-Unknown}"
+                echo "  Docs: ${INDICES_DOCS:-Unknown}"
+                echo "  Size: ${INDICES_SIZE:-Unknown}"
+            fi
         fi
 
         ls_endpoint="http://localhost:$PORT"
