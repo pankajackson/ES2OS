@@ -175,6 +175,18 @@ status() {
         # Extract the value of --path.data
         PATH_DATA=$(sudo ps -aux | grep "$PID" | awk -F'--path.data=' '{print $2}' | awk '{print $1}')
 
+        if [[ -z "$PATH_DATA" ]]; then
+            echo "Error: PATH_DATA is empty or not set"
+        else
+            INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
+            echo "Indices UUID: $INDICES_UUID"
+            INDICES_NAME=$(cat $INDICES_REPORT_FILE | grep $INDICES_UUID | awk -F ',' '{ print $4 }' | xargs)
+            INDICES_DOCS=$(cat $INDICES_REPORT_FILE | grep $INDICES_UUID | awk -F ',' '{ print $5 }' | xargs)
+            INDICES_SIZE=$(cat $INDICES_REPORT_FILE | grep $INDICES_UUID | awk -F ',' '{ print $6 }' | xargs)
+            echo "Indices Name: $INDICES_NAME"
+            echo "Indices Size: $INDICES_SIZE"
+        fi
+
         # Extract Pipeline Status
         ls_endpoint="http://localhost:$PORT"
         PIPELINE_STATE=$(curl -s $ls_endpoint/_node/stats/pipelines)
@@ -201,6 +213,7 @@ status() {
 
         # Output Results
         echo "Pipeline Status: $PIPELINE_STATUS"
+        echo "Pipeline Out: $PIPELINE_OUT / $INDICES_DOCS"
         echo "Pipeline Rate: $PIPELINE_RATE events/sec"
 
         # Run jstat command, suppress errors, and calculate heap usage
@@ -211,11 +224,11 @@ status() {
                 total_heap = $5 + $7 + $9          # Sum of capacities of Survivor, Eden, and Old generations
                 available_heap = total_heap - used_heap
                 # printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
-                printf "Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
+                printf "Logstash Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
             }'
 
-        echo "Configuration File: $CONFIG_FILE"
-        echo "Data Path: $PATH_DATA"
+        echo "Logstash Conf: $CONFIG_FILE"
+        echo "Logstash Data Path: $PATH_DATA"
     done
 
     # Restore `set -e` to its previous state
