@@ -11,7 +11,7 @@ setup() {
     wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
 
     # Install transport package and add Elasticsearch source list
-    sudo apt-get install -y apt-transport-https jq curl
+    sudo apt-get install -y apt-transport-https jq curl net-tools
     echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-7.x.list
 
     # Update package list and install specific version of Logstash
@@ -147,6 +147,24 @@ get_logstash_processes() {
     return 0 # Indicate success
 }
 
+get_master_processes() {
+    # Get the script name for filtering the processes
+    local SC_NAME="$0"
+
+    # Get all PIDs of processes related to the script and "migrate" keyword
+    local MASTER_PIDS
+    MASTER_PIDS=$(pgrep -f "$SC_NAME.*migrate" 2>/dev/null)
+
+    # Check if no processes are found
+    if [ -z "$MASTER_PIDS" ]; then
+        return 1 # Indicate failure
+    fi
+
+    # Return the filtered PIDs as a space-separated string
+    echo "$MASTER_PIDS"
+    return 0 # Indicate success
+}
+
 # Monitoring function
 status() {
     # Temporarily disable `set -e` for this function
@@ -229,24 +247,105 @@ status() {
     set -e
 }
 
-# TODO: grep processes using netstat and kill them, also use sudo to kill
 stop_all_processes() {
-    if [ -f "$LOGSTASH_DIR/pids" ]; then
+    # Temporarily disable `set -e` for this function
+    set +e
+
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(get_logstash_processes)
+    MASTER_PIDS=$(get_master_processes)
+
+    # Function to kill parent processes recursively and update the report if needed
+    kill_parent_processes() {
+        local PID=$1
+        local UUID=$2
+        while [[ -n "$PID" ]]; do
+            # Get the parent PID
+            PARENT_PID=$(ps -o ppid= -p "$PID" | xargs)
+            # Kill the process
+            sudo kill -9 "$PID" 2>/dev/null
+            echo "Terminated process with PID $PID (parent PID: $PARENT_PID)"
+            # If UUID is provided and not empty, update the report
+            if [[ -n "$UUID" ]]; then
+                update_indices_report "$UUID" "Stopped"
+            fi
+            # Stop if parent PID is 1 (init system)
+            if [[ "$PARENT_PID" -eq 1 ]]; then
+                break
+            fi
+            # Set PID to the parent PID for the next iteration
+            PID=$PARENT_PID
+        done
+    }
+
+    if [[ -n "$MASTER_PIDS" ]]; then
+        for MPID in $MASTER_PIDS; do
+
+            # Terminate the main Logstash process and its parent processes
+            kill_parent_processes "$MPID"
+
+            # Check if the Logstash process was terminated
+            if pgrep -x "$MPID" >/dev/null; then
+                echo "Failed to terminate Master process with PID $MPID."
+            else
+                echo "Master process with PID $MPID terminated successfully."
+            fi
+        done
+    else
+        echo "No Master processes found."
+    fi
+
+    # First, terminate all Logstash processes if they exist
+    if [[ -n "$LOGSTASH_PIDS" ]]; then
+        for LPID in $LOGSTASH_PIDS; do
+            PATH_DATA=$(sudo ps -aux | awk -v pid="$LPID" '$2 == pid {split($0, a, "--path.data="); split(a[2], b, " "); print b[1]}')
+
+            if [[ -n "$PATH_DATA" ]]; then
+                if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+                    echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
+                    INDICES_UUID=""
+                else
+                    INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
+                fi
+            fi
+
+            # Terminate the main Logstash process and its parent processes
+            kill_parent_processes "$LPID" "$INDICES_UUID"
+
+            # Check if the Logstash process was terminated
+            if pgrep -x "$LPID" >/dev/null; then
+                echo "Failed to terminate Logstash process with PID $LPID."
+            else
+                echo "Logstash process with PID $LPID terminated successfully."
+                if [[ -n "$INDICES_UUID" ]]; then
+                    update_indices_report "$INDICES_UUID" "Stopped"
+                fi
+            fi
+        done
+    else
+        echo "No Logstash processes found."
+    fi
+
+    # Then, process the PID file for associated processes, even if no Logstash processes were found
+    if [[ -f "$LOGSTASH_DIR/pids" ]]; then
         while read -r pid uuid; do
-            kill "$pid" 2>/dev/null
+            # Kill the process from the pids file and its parent processes
+            kill_parent_processes "$pid" "$uuid"
             sleep 1
-            if pgrep -x -P "$pid" >/dev/null; then
+            if pgrep -x "$pid" >/dev/null; then
                 echo "Failed to terminate process with PID $pid for UUID $uuid."
             else
                 echo "Process with PID $pid for UUID $uuid terminated successfully."
+                # Update the report for this UUID
                 if [[ -n "$uuid" ]]; then
                     update_indices_report "$uuid" "Stopped"
                 fi
+                # Remove the entry from the pids file
                 sed -i "/^$pid $uuid$/d" "$LOGSTASH_DIR/pids"
             fi
-
         done <"$LOGSTASH_DIR/pids"
     fi
+    set -e
 }
 
 # Fetch data views from API and save to file
@@ -909,6 +1008,9 @@ main() {
                 migrate
             } 2>&1 | tee -a "$log_file" "$current_log"
         fi
+        ;;
+    stop)
+        stop_all_processes
         ;;
     help)
         echo "Usage: $0 [-e env_file] [-d] {setup|migrate|getdashboards}"
