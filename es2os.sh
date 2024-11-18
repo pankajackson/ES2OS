@@ -167,12 +167,41 @@ status() {
 
         # Extract Logstash Port
         PORT=$(sudo netstat -nptul | grep "$PID" | awk '{print $4}' | awk -F ':' '{print $2}')
+        echo "Logstash Port: $PORT"
 
         # Extract the value of -f (configuration file path)
         CONFIG_FILE=$(sudo ps -aux | grep "$PID" | awk -F ' -f ' '{print $2}' | awk '{print $1}' | xargs)
 
         # Extract the value of --path.data
         PATH_DATA=$(sudo ps -aux | grep "$PID" | awk -F'--path.data=' '{print $2}' | awk '{print $1}')
+
+        # Extract Pipeline Status
+        ls_endpoint="http://localhost:$PORT"
+        PIPELINE_STATE=$(curl -s $ls_endpoint/_node/stats/pipelines)
+        if [[ -z "$PIPELINE_STATE" ]]; then
+            echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
+        else
+
+            # Extract Metrics
+            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status)
+            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis)
+            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out)
+            # Validate Data
+            if [[ -z "$PIPELINE_STATUS" || -z "$PIPELINE_DIM" || -z "$PIPELINE_OUT" ]]; then
+                echo "Error: Missing data in the pipeline stats"
+            else
+                # Calculate Event Rate
+                if [[ "$PIPELINE_DIM" -gt 0 ]]; then
+                    PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
+                else
+                    PIPELINE_RATE=0
+                fi
+            fi
+        fi
+
+        # Output Results
+        echo "Pipeline Status: $PIPELINE_STATUS"
+        echo "Pipeline Rate: $PIPELINE_RATE events/sec"
 
         # Run jstat command, suppress errors, and calculate heap usage
         sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
@@ -185,7 +214,6 @@ status() {
                 printf "Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
             }'
 
-        echo "Logstash Port: $PORT"
         echo "Configuration File: $CONFIG_FILE"
         echo "Data Path: $PATH_DATA"
     done
