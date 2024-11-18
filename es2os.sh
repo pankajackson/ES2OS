@@ -118,37 +118,118 @@ sanitize_name() {
     echo "$sanitized"
 }
 
-monitor_jvm() {
+# Function to get Logstash PIDs with active network connections
+get_logstash_processes() {
+    # Get all Logstash PIDs
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
+
+    # Check if no Logstash processes are found
+    if [ -z "$LOGSTASH_PIDS" ]; then
+        return 1 # Indicate failure
+    fi
+
+    # Filter PIDs to include only those with network activity
+    local FILTERED_PIDS=()
+    for PID in $LOGSTASH_PIDS; do
+        if sudo netstat -nptul | grep -q "$PID"; then
+            FILTERED_PIDS+=("$PID")
+        fi
+    done
+
+    # Check if no filtered PIDs remain
+    if [ ${#FILTERED_PIDS[@]} -eq 0 ]; then
+        return 1 # Indicate failure
+    fi
+
+    # return filtered PIDs as a space-separated string
+    echo "${FILTERED_PIDS[@]}"
+    return 0 # Indicate success
+}
+
+# Monitoring function
+status() {
     # Temporarily disable `set -e` for this function
     set +e
 
-    # Get all the Logstash PIDs once
-    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
-
-    if [ -z "$LOGSTASH_PIDS" ]; then
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(get_logstash_processes)
+    if [ $? -ne 0 ]; then
         echo "No Logstash processes found."
-    else
-        for PID in $LOGSTASH_PIDS; do
-            echo "Monitoring PID: $PID"
-            # Run jstat command, suppress errors, and calculate heap usage
-            sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
-                tail -n 1 |
-                awk '{
-                # Column indexes may vary; typical indexes for jstat -gc output:
-                # S0U (Survivor 0 Used), S1U (Survivor 1 Used), EU (Eden Used), OU (Old Used), MU (Metaspace Used)
-                # S0C, S1C, EC, OC, MC represent capacities of these respective memory pools
-                used_heap = $3 + $4 + $6 + $8      # Sum of used space in Survivor, Eden, and Old generations
-                total_heap = $5 + $7 + $9          # Sum of capacities of Survivor, Eden, and Old generations
-                available_heap = total_heap - used_heap
-                printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
-            }'
-        done
+        return
     fi
 
-    # Restore `set -e` to its previous state
+    echo "============================"
+
+    for PID in $LOGSTASH_PIDS; do
+        echo "Logstash Instance:"
+        echo "PID: $PID"
+        echo "----------------------------"
+
+        PORT=$(sudo netstat -nptul | awk -v pid="$PID" '$0 ~ pid {split($4, a, ":"); print a[2]}')
+        echo "Port: ${PORT:-Unavailable}"
+
+        CONFIG_FILE=$(sudo ps -aux | awk -v pid="$PID" '$2 == pid {split($0, a, "-f "); split(a[2], b, " "); print b[1]}')
+        echo "Config File: ${CONFIG_FILE:-Unavailable}"
+
+        PATH_DATA=$(sudo ps -aux | awk -v pid="$PID" '$2 == pid {split($0, a, "--path.data="); split(a[2], b, " "); print b[1]}')
+        echo "Data Path: ${PATH_DATA:-Unavailable}"
+
+        if [[ -n "$PATH_DATA" ]]; then
+            if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+                echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
+            else
+                INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
+                INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
+                INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
+                INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
+
+                echo "Index Info:"
+                echo "  UUID: $INDICES_UUID"
+                echo "  Name: ${INDICES_NAME:-Unknown}"
+                echo "  Docs: ${INDICES_DOCS:-Unknown}"
+                echo "  Size: ${INDICES_SIZE:-Unknown}"
+            fi
+        fi
+
+        ls_endpoint="http://localhost:$PORT"
+        PIPELINE_STATE=$(curl -s "$ls_endpoint/_node/stats/pipelines")
+        if [[ -z "$PIPELINE_STATE" ]]; then
+            echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
+        else
+            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
+            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
+            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
+
+            if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
+                PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
+            else
+                PIPELINE_RATE=0
+            fi
+
+            echo "Pipeline Info:"
+            echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
+            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0}"
+            echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
+        fi
+
+        sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
+            awk '{
+                used_heap = $3 + $4 + $6 + $8
+                total_heap = $5 + $7 + $9
+                printf "Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
+            }'
+
+        echo "----------------------------"
+    done
+
+    echo "End of Logstash Instance"
+    echo "============================"
+
     set -e
 }
 
+# TODO: grep processes using netstat and kill them, also use sudo to kill
 stop_all_processes() {
     if [ -f "$LOGSTASH_DIR/pids" ]; then
         while read -r pid uuid; do
@@ -805,8 +886,8 @@ main() {
     setup)
         setup
         ;;
-    monitorjvm)
-        monitor_jvm
+    status)
+        status
         ;;
     getdashboards)
         get_dashboards
