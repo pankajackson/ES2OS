@@ -12,6 +12,7 @@ OS_HOST="https://os.la.local:9200"
 OS_USER="admin"
 OS_PASS="admin"
 OS_SSL=true
+# OS_CA_FILE="/home/jackson/empty-ca.pem"
 OS_SSL_CERT_VERIFY=false
 
 BATCH_SIZE=2000
