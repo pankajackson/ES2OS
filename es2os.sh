@@ -82,6 +82,8 @@ setup_variables() {
 
     LOGS_DIR="$OUTPUT_DIR/logs"
     mkdir -p "$LOGS_DIR"
+    LOG_FILE="$LOGS_DIR/$(date '+%Y-%m-%d-%H-%M-%S').log"
+    CURRENT_LOG_FILE="$LOGS_DIR/current.log"
 
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
@@ -246,6 +248,21 @@ status() {
     echo "============================"
 
     set -e
+}
+
+logs() {
+    local follow_logs=$1
+
+    if [[ ! -f "$CURRENT_LOG_FILE" ]]; then
+        echo "No logs found. Migration might not have started yet."
+        exit 1
+    fi
+
+    if $follow_logs; then
+        tail -f "$CURRENT_LOG_FILE"
+    else
+        cat "$CURRENT_LOG_FILE"
+    fi
 }
 
 stop_all_processes() {
@@ -962,10 +979,11 @@ migrate() {
 # Main function to run the steps in sequence
 main() {
     daemon_mode=false
+    follow_logs=false
     env_file=""
 
     # Process options
-    while getopts "e:d" opt; do
+    while getopts "e:df" opt; do
         case "$opt" in
         e)
             env_file="$OPTARG"
@@ -973,10 +991,14 @@ main() {
         d)
             daemon_mode=true
             ;;
+        f)
+            follow_logs=true
+            ;;
         *)
-            echo "Usage: $0 [-e env_file] [-d] {setup|migrate|getdashboards}"
+            echo "Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
             echo "  -e <env_file>   Specify the environment file to load."
-            echo "  -d            Run the command in daemon mode (background)."
+            echo "  -d              Run the migration in daemon mode (background)."
+            echo "  -f              Follow logs in real-time."
             exit 1
             ;;
         esac
@@ -1002,33 +1024,35 @@ main() {
         get_dashboards
         ;;
     migrate)
-        log_file="$LOGS_DIR/$(date '+%Y-%m-%d-%H-%M-%S').log"
-        current_log="$LOGS_DIR/current.log"
 
-        >"$current_log" # Clear the current log
+        >"$CURRENT_LOG_FILE" # Clear the current log
         if $daemon_mode; then
-            echo "Starting migration in the background. Logs will be saved to $log_file and $current_log."
+            echo "Starting migration in the background. Logs will be saved to $LOG_FILE and $CURRENT_LOG_FILE."
             {
                 migrate
-            } 2>&1 | tee -a "$log_file" "$current_log" >/dev/null &
+            } 2>&1 | tee -a "$LOG_FILE" "$CURRENT_LOG_FILE" >/dev/null &
             disown # Detach the background process from the terminal
         else
-            echo "Starting migration in the foreground. Logs will be saved to $log_file and $current_log."
+            echo "Starting migration in the foreground. Logs will be saved to $LOG_FILE and $CURRENT_LOG_FILE."
             {
                 migrate
-            } 2>&1 | tee -a "$log_file" "$current_log"
+            } 2>&1 | tee -a "$LOG_FILE" "$CURRENT_LOG_FILE"
         fi
+        ;;
+    logs)
+        logs $follow_logs
         ;;
     stop)
         stop_all_processes
         ;;
     help)
-        echo "Usage: $0 [-e env_file] [-d] {setup|migrate|getdashboards}"
+        echo "Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
         echo "  -e <env_file>   Specify the environment file to load."
-        echo "  -d            Run the command in daemon mode (background)."
+        echo "  -d              Run the migration in daemon mode (background)."
+        echo "  -f              Follow logs in real-time."
         ;;
     *)
-        echo "Error: Invalid command. Usage: $0 [-e env_file] [-d] {setup|migrate|getdashboards}"
+        echo "Error: Invalid command. Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
         exit 1
         ;;
     esac
