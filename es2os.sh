@@ -233,10 +233,10 @@ status() {
         fi
 
         sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
-            awk '{
+            awk 'NR > 1 {
                 used_heap = $3 + $4 + $6 + $8
                 total_heap = $5 + $7 + $9
-                printf "Heap Usage: %.2f / %.2f MB\n", used_heap/1024, total_heap/1024
+                printf "Heap Usage: %.2f / %.2f MB\n", used_heap / 1024, total_heap / 1024
             }'
 
         echo "----------------------------"
