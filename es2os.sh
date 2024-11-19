@@ -54,6 +54,7 @@ setup_variables() {
     OS_USERNAME="${OS_USER:-admin}"
     OS_PASSWORD="${OS_PASS:-default_admin_password}"
     OS_SSL="${OS_SSL:-true}"
+    OS_CA_FILE="${OS_CA_FILE:-}"
     OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
     # Define output directory and create it if it doesn't exist
@@ -454,6 +455,15 @@ EOF
         ssl_certificate_verification => $OS_SSL_CERT_VERIFY
         index => "%{[@metadata][doc][_index]}"
         document_id => "%{[@metadata][doc][_id]}"
+EOF
+
+    # Add ca_file only if ES_CA_FILE is set
+    if [ -n "$OS_CA_FILE" ]; then
+        echo "        cacert => \"$OS_CA_FILE\"" >>"$config_file"
+    fi
+
+    # Close the input and start output section
+    cat <<EOF >>"$config_file"
     }
 }
 EOF
