@@ -48,6 +48,7 @@ setup_variables() {
     ES_PASSWORD="${ES_PASS:-default_elastic_password}"
     ES_SSL="${ES_SSL:-true}"
     ES_CA_FILE="${ES_CA_FILE:-}"
+    ES_BATCH_SIZE="${ES_BATCH_SIZE:-2000}"
     DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
 
     OS_ENDPOINT="${OS_HOST:-https://os.la.local:9200}"
@@ -91,9 +92,6 @@ setup_variables() {
     # Set DEBUG to false by default
     DEBUG="${DEBUG:-false}"
 
-    # Set batch for data migration, 2000 is default
-    BATCH_SIZE="${BATCH_SIZE:-2000}"
-
     # Set concurrency, 2 is default
     CONCURRENCY="${CONCURRENCY:-2}"
     if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || [ "$CONCURRENCY" -lt 2 ]; then
@@ -102,6 +100,9 @@ setup_variables() {
 
     # Set indices pattern to exclude, default is none
     EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-}"
+
+    # Logstash pipeline batch size, 500 is default
+    LS_BATCH_SIZE="${LS_BATCH_SIZE:-125}"
 
     # Set default JAVAOPTS
     LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
@@ -441,7 +442,7 @@ input {
         index => "$index,-.*"
         query => '{ "query": { "query_string": { "query": "*" } } }'
         scroll => "5m"
-        size => $BATCH_SIZE
+        size => $ES_BATCH_SIZE
         docinfo => true
         docinfo_target => "[@metadata][doc]"
 EOF
@@ -522,8 +523,8 @@ run_logstash() {
 
         # Run Logstash in the background with the unique path.data
         echo "Running Logstash for index $index..."
-        sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
-        pid=$!                                                                                        # Capture the background process's PID
+        sudo -E /usr/share/logstash/bin/logstash -b $LS_BATCH_SIZE -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
+        pid=$!                                                                                                          # Capture the background process's PID
         echo "Logstash for index $index started with PID $pid."
         echo "$pid $uuid" >>"$LOGSTASH_DIR/pids" # Store UUID and PID in pids file
 

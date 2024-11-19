@@ -6,6 +6,7 @@ ES_USER="elastic"
 ES_PASS="elastic"
 ES_SSL=true
 # ES_CA_FILE="/home/jackson/empty-ca.pem"
+ES_BATCH_SIZE=2000
 DATAVIEW_API_INSECURE=true
 
 OS_HOST="https://os.la.local:9200"
@@ -15,10 +16,10 @@ OS_SSL=true
 # OS_CA_FILE="/home/jackson/empty-ca.pem"
 OS_SSL_CERT_VERIFY=false
 
-BATCH_SIZE=2000
 CONCURRENCY=4
 CONFIG_CLEANUP=false
 DEBUG=false
 EXCLUDE_PATTERNS=""
+LS_BATCH_SIZE=125
 # LS_JAVA_OPTS="-Xms1g -Xmx1g"
 OUTPUT_DIR="./output_files"
