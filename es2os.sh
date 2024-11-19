@@ -11,7 +11,7 @@ setup() {
     wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
 
     # Install transport package and add Elasticsearch source list
-    sudo apt-get install -y apt-transport-https jq curl
+    sudo apt-get install -y apt-transport-https jq curl net-tools
     echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-7.x.list
 
     # Update package list and install specific version of Logstash
@@ -54,6 +54,7 @@ setup_variables() {
     OS_USERNAME="${OS_USER:-admin}"
     OS_PASSWORD="${OS_PASS:-default_admin_password}"
     OS_SSL="${OS_SSL:-true}"
+    OS_CA_FILE="${OS_CA_FILE:-}"
     OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
     # Define output directory and create it if it doesn't exist
@@ -78,6 +79,11 @@ setup_variables() {
 
     DASHBOARD_DIR="$OUTPUT_DIR/dashboards"
     mkdir -p "$DASHBOARD_DIR"
+
+    LOGS_DIR="$OUTPUT_DIR/logs"
+    mkdir -p "$LOGS_DIR"
+    LOG_FILE="$LOGS_DIR/$(date '+%Y-%m-%d-%H-%M-%S').log"
+    CURRENT_LOG_FILE="$LOGS_DIR/current.log"
 
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
@@ -115,54 +121,249 @@ sanitize_name() {
     echo "$sanitized"
 }
 
-monitor_jvm() {
+# Function to get Logstash PIDs with active network connections
+get_logstash_processes() {
+    # Get all Logstash PIDs
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
+
+    # Check if no Logstash processes are found
+    if [ -z "$LOGSTASH_PIDS" ]; then
+        return 1 # Indicate failure
+    fi
+
+    # Filter PIDs to include only those with network activity
+    local FILTERED_PIDS=()
+    for PID in $LOGSTASH_PIDS; do
+        if sudo netstat -nptul | grep -q "$PID"; then
+            FILTERED_PIDS+=("$PID")
+        fi
+    done
+
+    # Check if no filtered PIDs remain
+    if [ ${#FILTERED_PIDS[@]} -eq 0 ]; then
+        return 1 # Indicate failure
+    fi
+
+    # return filtered PIDs as a space-separated string
+    echo "${FILTERED_PIDS[@]}"
+    return 0 # Indicate success
+}
+
+get_master_processes() {
+    # Get the script name for filtering the processes
+    local SC_NAME="$0"
+
+    # Get all PIDs of processes related to the script and "migrate" keyword
+    local MASTER_PIDS
+    MASTER_PIDS=$(pgrep -f "$SC_NAME.*migrate" 2>/dev/null)
+
+    # Check if no processes are found
+    if [ -z "$MASTER_PIDS" ]; then
+        return 1 # Indicate failure
+    fi
+
+    # Return the filtered PIDs as a space-separated string
+    echo "$MASTER_PIDS"
+    return 0 # Indicate success
+}
+
+# Monitoring function
+status() {
     # Temporarily disable `set -e` for this function
     set +e
 
-    # Get all the Logstash PIDs once
-    LOGSTASH_PIDS=$(pgrep -f logstash 2>/dev/null)
-
-    if [ -z "$LOGSTASH_PIDS" ]; then
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(get_logstash_processes)
+    if [ $? -ne 0 ]; then
         echo "No Logstash processes found."
-    else
-        for PID in $LOGSTASH_PIDS; do
-            echo "Monitoring PID: $PID"
-            # Run jstat command, suppress errors, and calculate heap usage
-            sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
-                tail -n 1 |
-                awk '{
-                # Column indexes may vary; typical indexes for jstat -gc output:
-                # S0U (Survivor 0 Used), S1U (Survivor 1 Used), EU (Eden Used), OU (Old Used), MU (Metaspace Used)
-                # S0C, S1C, EC, OC, MC represent capacities of these respective memory pools
-                used_heap = $3 + $4 + $6 + $8      # Sum of used space in Survivor, Eden, and Old generations
-                total_heap = $5 + $7 + $9          # Sum of capacities of Survivor, Eden, and Old generations
-                available_heap = total_heap - used_heap
-                printf "Total Heap: %.2f MB\nUsed Heap: %.2f MB\nAvailable Heap: %.2f MB\n", total_heap/1024, used_heap/1024, available_heap/1024
-            }'
-        done
+        return
     fi
 
-    # Restore `set -e` to its previous state
+    echo "============================"
+
+    for PID in $LOGSTASH_PIDS; do
+        echo "Logstash Instance:"
+        echo "PID: $PID"
+        echo "----------------------------"
+
+        PORT=$(sudo netstat -nptul | awk -v pid="$PID" '$0 ~ pid {split($4, a, ":"); print a[2]}')
+        echo "Port: ${PORT:-Unavailable}"
+
+        CONFIG_FILE=$(sudo ps -aux | awk -v pid="$PID" '$2 == pid {split($0, a, "-f "); split(a[2], b, " "); print b[1]}')
+        echo "Config File: ${CONFIG_FILE:-Unavailable}"
+
+        PATH_DATA=$(sudo ps -aux | awk -v pid="$PID" '$2 == pid {split($0, a, "--path.data="); split(a[2], b, " "); print b[1]}')
+        echo "Data Path: ${PATH_DATA:-Unavailable}"
+
+        if [[ -n "$PATH_DATA" ]]; then
+            if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+                echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
+            else
+                INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
+                INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
+                INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
+                INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
+
+                echo "Index Info:"
+                echo "  UUID: $INDICES_UUID"
+                echo "  Name: ${INDICES_NAME:-Unknown}"
+                echo "  Docs: ${INDICES_DOCS:-Unknown}"
+                echo "  Size: ${INDICES_SIZE:-Unknown}"
+            fi
+        fi
+
+        ls_endpoint="http://localhost:$PORT"
+        PIPELINE_STATE=$(curl -s "$ls_endpoint/_node/stats/pipelines")
+        if [[ -z "$PIPELINE_STATE" ]]; then
+            echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
+        else
+            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
+            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
+            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
+
+            if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
+                PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
+            else
+                PIPELINE_RATE=0
+            fi
+
+            echo "Pipeline Info:"
+            echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
+            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0}"
+            echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
+        fi
+
+        sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
+            awk 'NR > 1 {
+                used_heap = $3 + $4 + $6 + $8
+                total_heap = $5 + $7 + $9
+                printf "Heap Usage: %.2f / %.2f MB\n", used_heap / 1024, total_heap / 1024
+            }'
+
+        echo "----------------------------"
+    done
+
+    echo "End of Logstash Instance"
+    echo "============================"
+
     set -e
 }
 
+logs() {
+    local follow_logs=$1
+
+    if [[ ! -f "$CURRENT_LOG_FILE" ]]; then
+        echo "No logs found. Migration might not have started yet."
+        exit 1
+    fi
+
+    if $follow_logs; then
+        tail -f "$CURRENT_LOG_FILE"
+    else
+        cat "$CURRENT_LOG_FILE"
+    fi
+}
+
 stop_all_processes() {
-    if [ -f "$LOGSTASH_DIR/pids" ]; then
+    # Temporarily disable `set -e` for this function
+    set +e
+
+    local LOGSTASH_PIDS
+    LOGSTASH_PIDS=$(get_logstash_processes)
+    MASTER_PIDS=$(get_master_processes)
+
+    # Function to kill parent processes recursively and update the report if needed
+    kill_parent_processes() {
+        local PID=$1
+        local UUID=$2
+        while [[ -n "$PID" ]]; do
+            # Get the parent PID
+            PARENT_PID=$(ps -o ppid= -p "$PID" | xargs)
+            # Kill the process
+            sudo kill -9 "$PID" 2>/dev/null
+            echo "Terminated process with PID $PID (parent PID: $PARENT_PID)"
+            # If UUID is provided and not empty, update the report
+            if [[ -n "$UUID" ]]; then
+                update_indices_report "$UUID" "Stopped"
+            fi
+            # Stop if parent PID is 1 (init system)
+            if [[ "$PARENT_PID" -eq 1 ]]; then
+                break
+            fi
+            # Set PID to the parent PID for the next iteration
+            PID=$PARENT_PID
+        done
+    }
+
+    if [[ -n "$MASTER_PIDS" ]]; then
+        for MPID in $MASTER_PIDS; do
+
+            # Terminate the main Logstash process and its parent processes
+            kill_parent_processes "$MPID"
+
+            # Check if the Logstash process was terminated
+            if pgrep -x "$MPID" >/dev/null; then
+                echo "Failed to terminate Master process with PID $MPID."
+            else
+                echo "Master process with PID $MPID terminated successfully."
+            fi
+        done
+    else
+        echo "No Master processes found."
+    fi
+
+    # First, terminate all Logstash processes if they exist
+    if [[ -n "$LOGSTASH_PIDS" ]]; then
+        for LPID in $LOGSTASH_PIDS; do
+            PATH_DATA=$(sudo ps -aux | awk -v pid="$LPID" '$2 == pid {split($0, a, "--path.data="); split(a[2], b, " "); print b[1]}')
+
+            if [[ -n "$PATH_DATA" ]]; then
+                if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
+                    echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
+                    INDICES_UUID=""
+                else
+                    INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
+                fi
+            fi
+
+            # Terminate the main Logstash process and its parent processes
+            kill_parent_processes "$LPID" "$INDICES_UUID"
+
+            # Check if the Logstash process was terminated
+            if pgrep -x "$LPID" >/dev/null; then
+                echo "Failed to terminate Logstash process with PID $LPID."
+            else
+                echo "Logstash process with PID $LPID terminated successfully."
+                if [[ -n "$INDICES_UUID" ]]; then
+                    update_indices_report "$INDICES_UUID" "Stopped"
+                fi
+            fi
+        done
+    else
+        echo "No Logstash processes found."
+    fi
+
+    # Then, process the PID file for associated processes, even if no Logstash processes were found
+    if [[ -f "$LOGSTASH_DIR/pids" ]]; then
         while read -r pid uuid; do
-            kill "$pid" 2>/dev/null
+            # Kill the process from the pids file and its parent processes
+            kill_parent_processes "$pid" "$uuid"
             sleep 1
-            if pgrep -x -P "$pid" >/dev/null; then
+            if pgrep -x "$pid" >/dev/null; then
                 echo "Failed to terminate process with PID $pid for UUID $uuid."
             else
                 echo "Process with PID $pid for UUID $uuid terminated successfully."
+                # Update the report for this UUID
                 if [[ -n "$uuid" ]]; then
                     update_indices_report "$uuid" "Stopped"
                 fi
+                # Remove the entry from the pids file
                 sed -i "/^$pid $uuid$/d" "$LOGSTASH_DIR/pids"
             fi
-
         done <"$LOGSTASH_DIR/pids"
     fi
+    set -e
 }
 
 # Fetch data views from API and save to file
@@ -271,6 +472,15 @@ EOF
         ssl_certificate_verification => $OS_SSL_CERT_VERIFY
         index => "%{[@metadata][doc][_index]}"
         document_id => "%{[@metadata][doc][_id]}"
+EOF
+
+    # Add ca_file only if ES_CA_FILE is set
+    if [ -n "$OS_CA_FILE" ]; then
+        echo "        cacert => \"$OS_CA_FILE\"" >>"$config_file"
+    fi
+
+    # Close the input and start output section
+    cat <<EOF >>"$config_file"
     }
 }
 EOF
@@ -768,19 +978,38 @@ migrate() {
 
 # Main function to run the steps in sequence
 main() {
+    daemon_mode=false
+    follow_logs=false
+    env_file=""
+
     # Process options
-    while getopts "e:" opt; do
+    while getopts "e:df" opt; do
         case "$opt" in
-        e) env_file="$OPTARG" ;;
+        e)
+            env_file="$OPTARG"
+            ;;
+        d)
+            daemon_mode=true
+            ;;
+        f)
+            follow_logs=true
+            ;;
         *)
-            echo "Usage: $0 [-e env_file] {setup|migrate|getdashboards}"
+            echo "Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
+            echo "  -e <env_file>   Specify the environment file to load."
+            echo "  -d              Run the migration in daemon mode (background)."
+            echo "  -f              Follow logs in real-time."
             exit 1
             ;;
         esac
     done
-    shift $((OPTIND - 1))
+    shift $((OPTIND - 1)) # Shift positional arguments after options
 
     # Set up environment variables
+    if [[ -n "$env_file" && ! -f "$env_file" ]]; then
+        echo "Error: Environment file '$env_file' does not exist."
+        exit 1
+    fi
     setup_variables "$env_file"
 
     # Handle commands (setup or migrate)
@@ -788,17 +1017,42 @@ main() {
     setup)
         setup
         ;;
-    monitorjvm)
-        monitor_jvm
+    status)
+        status
         ;;
     getdashboards)
         get_dashboards
         ;;
     migrate)
-        migrate
+
+        >"$CURRENT_LOG_FILE" # Clear the current log
+        if $daemon_mode; then
+            echo "Starting migration in the background. Logs will be saved to $LOG_FILE and $CURRENT_LOG_FILE."
+            {
+                migrate
+            } 2>&1 | tee -a "$LOG_FILE" "$CURRENT_LOG_FILE" >/dev/null &
+            disown # Detach the background process from the terminal
+        else
+            echo "Starting migration in the foreground. Logs will be saved to $LOG_FILE and $CURRENT_LOG_FILE."
+            {
+                migrate
+            } 2>&1 | tee -a "$LOG_FILE" "$CURRENT_LOG_FILE"
+        fi
+        ;;
+    logs)
+        logs $follow_logs
+        ;;
+    stop)
+        stop_all_processes
+        ;;
+    help)
+        echo "Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
+        echo "  -e <env_file>   Specify the environment file to load."
+        echo "  -d              Run the migration in daemon mode (background)."
+        echo "  -f              Follow logs in real-time."
         ;;
     *)
-        echo "Invalid command. Usage: $0 {setup|migrate|getdashboards}"
+        echo "Error: Invalid command. Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
         exit 1
         ;;
     esac
