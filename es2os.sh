@@ -219,6 +219,8 @@ status() {
             echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
         else
             PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
+            PIPELINE_BATCH_SIZE=$(echo "$PIPELINE_STATE" | jq -r .pipeline.batch_size 2>/dev/null)
+            PIPELINE_WORKER=$(echo "$PIPELINE_STATE" | jq -r .pipeline.workers 2>/dev/null)
             PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
             PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
 
@@ -230,6 +232,8 @@ status() {
 
             echo "Pipeline Info:"
             echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
+            echo "  Batch Size: ${PIPELINE_BATCH_SIZE:-Unavailable}"
+            echo "  Workers: ${PIPELINE_WORKER:-Unavailable}"
             echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0}"
             echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
         fi
@@ -393,8 +397,8 @@ get_dashboards() {
 
         # Export each dashboard to a separate ndjson file
         curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/saved_objects/_export" -H 'kbn-xsrf: true' -H 'Content-Type: application/json' -d '{
-            "objects": [{"type": "dashboard", "id": "'"$id"'"}],
-            "includeReferencesDeep": true
+"objects": [{"type": "dashboard", "id": "'"$id"'"}],
+"includeReferencesDeep": true
         }' >"$dashboard_file"
     done
 
