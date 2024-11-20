@@ -211,10 +211,10 @@ status() {
                 INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
 
                 echo "Index Info:"
-                echo "  UUID:       ${INDICES_UUID}"
-                echo "  Name:       ${INDICES_NAME:-Unknown}"
-                echo "  Docs:       ${INDICES_DOCS:-Unknown}"
-                echo "  Size:       ${INDICES_SIZE:-Unknown}"
+                echo "  UUID:   ${INDICES_UUID}"
+                echo "  Name:   ${INDICES_NAME:-Unknown}"
+                echo "  Docs:   ${INDICES_DOCS:-Unknown}"
+                echo "  Size:   ${INDICES_SIZE:-Unknown}"
             fi
         fi
 
