@@ -231,11 +231,17 @@ status() {
                 PIPELINE_RATE=0
             fi
 
+            if [ "${INDICES_DOCS:-0}" -eq 0 ]; then
+                PERCENTAGE=0
+            else
+                PERCENTAGE=$(awk "BEGIN { printf \"%.2f\", ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-1} * 100 }")
+            fi
+
             echo "Pipeline Info:"
             echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
             echo "  Batch Size: ${PIPELINE_BATCH_SIZE:-Unavailable}"
             echo "  Workers: ${PIPELINE_WORKER:-Unavailable}"
-            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0}"
+            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0} (${PERCENTAGE}%)"
             echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
         fi
 
