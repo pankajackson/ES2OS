@@ -968,7 +968,6 @@ process_dataview() {
     echo "All Logstash processes have completed."
     trap - SIGINT # Reset the trap after processes are complete
 }
-
 migrate() {
     echo "Starting data migration..."
 
@@ -1002,9 +1001,10 @@ migrate() {
         id=$(echo "$row" | jq -r '.id')
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
+        assigned_instance_id=$((counter % total_instances + 1))
 
         # Check if the current index matches the instance number
-        if ((counter % total_instances == (instance_id - 1))); then
+        if ((assigned_instance_id == instance_id)); then
             echo "Instance $instance_id processing data view with ID: $id"
 
             if verify_dataview "$id" "$name" "$title"; then
@@ -1016,7 +1016,7 @@ migrate() {
                 fi
             fi
         else
-            echo "Skipping data view $title for Instance $((counter % total_instances))"
+            echo "Skipping data view $title for Instance $assigned_instance_id"
         fi
 
         # Increment counter to track the current index
