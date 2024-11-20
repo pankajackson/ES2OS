@@ -41,6 +41,10 @@ setup_variables() {
         echo "Warning: Environment file $env_file_path not found. Using default values."
     fi
 
+    # Define Instance Details
+    INSTANCE_COUNT="${INSTANCE_COUNT:-1}"
+    INSTANCE_ID="${INSTANCE_ID:-1}"
+
     # Define default values for environment variables
     ES_ENDPOINT="${ES_HOST:-https://es.la.local:9200}"
     KB_ENDPOINT="${KB_HOST:-https://kb.la.local:5601}"
@@ -207,10 +211,10 @@ status() {
                 INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
 
                 echo "Index Info:"
-                echo "  UUID: $INDICES_UUID"
-                echo "  Name: ${INDICES_NAME:-Unknown}"
-                echo "  Docs: ${INDICES_DOCS:-Unknown}"
-                echo "  Size: ${INDICES_SIZE:-Unknown}"
+                echo "  UUID:   ${INDICES_UUID}"
+                echo "  Name:   ${INDICES_NAME:-Unknown}"
+                echo "  Docs:   ${INDICES_DOCS:-Unknown}"
+                echo "  Size:   ${INDICES_SIZE:-Unknown}"
             fi
         fi
 
@@ -238,11 +242,11 @@ status() {
             fi
 
             echo "Pipeline Info:"
-            echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
+            echo "  Status:     ${PIPELINE_STATUS:-Unavailable}"
             echo "  Batch Size: ${PIPELINE_BATCH_SIZE:-Unavailable}"
-            echo "  Workers: ${PIPELINE_WORKER:-Unavailable}"
-            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0} (${PERCENTAGE}%)"
-            echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
+            echo "  Workers:    ${PIPELINE_WORKER:-Unavailable}"
+            echo "  Out:        ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0} (${PERCENTAGE}%)"
+            echo "  Rate:       ${PIPELINE_RATE:-0.00} events/sec"
         fi
 
         sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
@@ -752,6 +756,8 @@ fetch_dataviews() {
     if [[ ! -s "$DATAVIEW_FILE" ]]; then
         echo "No data views found or failed to fetch data views. Exiting."
         exit 1
+    else
+        jq -c '.data_view |= sort_by(.id)' "$DATAVIEW_FILE" >"$DATAVIEW_FILE.tmp" && mv "$DATAVIEW_FILE.tmp" "$DATAVIEW_FILE"
     fi
 
     # Output the content for debugging
@@ -775,7 +781,6 @@ generate_initial_report() {
         sid=$(sanitize_name "$id")
         if ! grep -q "^$sid," "$REPORT_FILE"; then
             echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
-
         fi
         # Fetch Indices List
         fetch_indices "$id" "$name" "$title"
@@ -963,7 +968,6 @@ process_dataview() {
     echo "All Logstash processes have completed."
     trap - SIGINT # Reset the trap after processes are complete
 }
-
 migrate() {
     echo "Starting data migration..."
 
@@ -980,21 +984,45 @@ migrate() {
     # Clean pid file
     >"$LOGSTASH_DIR/pids"
 
+    # Define total instances and current instance ID
+    total_instances="$INSTANCE_COUNT" # Total number of instances
+    instance_id="$INSTANCE_ID"        # Current instance ID
+
+    if [[ -z "$total_instances" || -z "$instance_id" || "$instance_id" -gt "$total_instances" || "$instance_id" -lt 1 ]]; then
+        echo "Invalid input. Please provide valid total_instances and instance_id (1 <= instance_id <= total_instances)."
+        exit 1
+    fi
+
+    # Initialize counter for the data view index
+    counter=0
+
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
+        assigned_instance_id=$((counter % total_instances + 1))
 
-        if verify_dataview "$id" "$name" "$title"; then
-            update_report "$id" "$name" "$title" "InProgress"
-            if process_dataview "$id" "$name" "$title"; then
-                update_report "$id" "$name" "$title" "Done"
-            else
-                update_report "$id" "$name" "$title" "Failed"
+        # Check if the current index matches the instance number
+        if ((assigned_instance_id == instance_id)); then
+            echo "Instance $instance_id processing data view with ID: $id"
+
+            if verify_dataview "$id" "$name" "$title"; then
+                update_report "$id" "$name" "$title" "InProgress"
+                if process_dataview "$id" "$name" "$title"; then
+                    update_report "$id" "$name" "$title" "Done"
+                else
+                    update_report "$id" "$name" "$title" "Failed"
+                fi
             fi
+        else
+            echo "Skipping data view $title for Instance $assigned_instance_id"
         fi
+
+        # Increment counter to track the current index
+        ((counter++))
     done || exit 1
+
     echo "Data migration complete."
 }
 
