@@ -41,6 +41,10 @@ setup_variables() {
         echo "Warning: Environment file $env_file_path not found. Using default values."
     fi
 
+    # Define Instance Details
+    INSTANCE_COUNT="${INSTANCE_COUNT:-1}"
+    INSTANCE_ID="${INSTANCE_ID:-1}"
+
     # Define default values for environment variables
     ES_ENDPOINT="${ES_HOST:-https://es.la.local:9200}"
     KB_ENDPOINT="${KB_HOST:-https://kb.la.local:5601}"
@@ -780,6 +784,9 @@ generate_initial_report() {
         # Fetch Indices List
         fetch_indices "$id" "$name" "$title"
     done
+
+    # Sort the report file by the 'id' column (second column) and overwrite the report file
+    sort -t, -k2 "$REPORT_FILE" -o "$REPORT_FILE"
 }
 
 # Update or append status in the report file
@@ -980,21 +987,36 @@ migrate() {
     # Clean pid file
     >"$LOGSTASH_DIR/pids"
 
+    # Define total instances and current instance ID
+    total_instances="$INSTANCE_COUNT" # Total number of instances
+    instance_id="$INSTANCE_ID"        # Current instance ID
+
+    if [[ -z "$total_instances" || -z "$instance_id" || "$instance_id" -gt "$total_instances" || "$instance_id" -lt 1 ]]; then
+        echo "Invalid input. Please provide valid total_instances and instance_id (1 <= instance_id <= total_instances)."
+        exit 1
+    fi
+
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
 
-        if verify_dataview "$id" "$name" "$title"; then
-            update_report "$id" "$name" "$title" "InProgress"
-            if process_dataview "$id" "$name" "$title"; then
-                update_report "$id" "$name" "$title" "Done"
-            else
-                update_report "$id" "$name" "$title" "Failed"
+        # Check if the data view id is a multiple of the current instance
+        if ((id % total_instances == (instance_id - 1))); then
+            echo "Instance $instance_id processing data view with ID: $id"
+
+            if verify_dataview "$id" "$name" "$title"; then
+                update_report "$id" "$name" "$title" "InProgress"
+                if process_dataview "$id" "$name" "$title"; then
+                    update_report "$id" "$name" "$title" "Done"
+                else
+                    update_report "$id" "$name" "$title" "Failed"
+                fi
             fi
         fi
     done || exit 1
+
     echo "Data migration complete."
 }
 
