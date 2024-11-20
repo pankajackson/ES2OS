@@ -599,8 +599,19 @@ generate_initial_indices_report() {
             continue
         fi
 
-        # Check if the UUID is already in the report file to avoid duplicates
-        if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
+        # Check if the UUID is already in the report file
+        if grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
+            # Extract existing values from the report file
+            existing_line=$(grep "^$uuid," "$INDICES_REPORT_FILE")
+            existing_doc_count=$(echo "$existing_line" | cut -d',' -f5 | xargs)
+
+            # Compare and update if the new doc count is greater
+            if [[ "$doc_count" -gt "$existing_doc_count" ]]; then
+                # Update the line in the report file and set Status to Updated
+                sed -i "s|^$uuid,.*|$uuid, $sid, $index_pattern, $index_name, $doc_count, $primary_size, , $current_time, Updated|" "$INDICES_REPORT_FILE"
+            fi
+        else
+            # Add new entry if UUID is not present
             echo "$uuid, $sid, $index_pattern, $index_name, $doc_count, $primary_size, , $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
