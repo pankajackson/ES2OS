@@ -756,6 +756,8 @@ fetch_dataviews() {
     if [[ ! -s "$DATAVIEW_FILE" ]]; then
         echo "No data views found or failed to fetch data views. Exiting."
         exit 1
+    else
+        jq -c '.data_view |= sort_by(.id)' "$DATAVIEW_FILE" >"$DATAVIEW_FILE.tmp" && mv "$DATAVIEW_FILE.tmp" "$DATAVIEW_FILE"
     fi
 
     # Output the content for debugging
@@ -779,14 +781,10 @@ generate_initial_report() {
         sid=$(sanitize_name "$id")
         if ! grep -q "^$sid," "$REPORT_FILE"; then
             echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
-
         fi
         # Fetch Indices List
         fetch_indices "$id" "$name" "$title"
     done
-
-    # Sort the report file by the 'id' column (second column) and overwrite the report file
-    sort -t, -k2 "$REPORT_FILE" -o "$REPORT_FILE"
 }
 
 # Update or append status in the report file
@@ -996,14 +994,17 @@ migrate() {
         exit 1
     fi
 
+    # Initialize counter for the data view index
+    counter=0
+
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
 
-        # Check if the data view id is a multiple of the current instance
-        if ((id % total_instances == (instance_id - 1))); then
+        # Check if the current index matches the instance number
+        if ((counter % total_instances == (instance_id - 1))); then
             echo "Instance $instance_id processing data view with ID: $id"
 
             if verify_dataview "$id" "$name" "$title"; then
@@ -1014,7 +1015,12 @@ migrate() {
                     update_report "$id" "$name" "$title" "Failed"
                 fi
             fi
+        else
+            echo "Skipping data view $title for Instance $((counter % total_instances))"
         fi
+
+        # Increment counter to track the current index
+        ((counter++))
     done || exit 1
 
     echo "Data migration complete."
