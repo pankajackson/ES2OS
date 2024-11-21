@@ -1204,7 +1204,6 @@ migrate() {
 }
 
 report() {
-
     local dataview_report_file="$REPORT_DIR/dataview.csv"
     local indices_report_file="$REPORT_DIR/indices.csv"
 
@@ -1273,9 +1272,10 @@ report() {
 
         total_docs_count=0
         total_storage_size=0
-        data_view_status=Done
+        data_view_status="Done"
+
         # Parse indices list and match with the data view
-        jq -c '.indices[]' "$indices_json_file" | while read -r index_entry; do
+        while read -r index_entry; do
             es_index_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
             es_index_uuid=$(echo "$index_entry" | jq -r '.UUID')
             es_index_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
@@ -1283,9 +1283,6 @@ report() {
 
             # Convert store size to bytes
             index_store_size_bytes=$(convert_to_bytes "$es_index_store_size")
-
-            # Debug: Check if data is being correctly extracted
-            echo "Processing index: $es_index_name with docs_count: $es_index_docs_count and store_size: $index_store_size_bytes bytes"
 
             # Check for matching index UUID from OpenSearch
             index_details=$(echo "$opensearch_indices" | grep -w "$es_index_name")
@@ -1300,13 +1297,13 @@ report() {
                 pri_store_size=$(echo "$index_details" | awk '{print $9}')
                 rep_store_size=$(echo "$index_details" | awk '{print $10}')
 
-                if [[ $docs_count -ge $es_index_docs_count ]]; then
-                    indices_status=Done
-                    data_view_status=Pening
+                if [[ $docs_count -lt $es_index_docs_count ]]; then
+                    indices_status="Pending"
+                    data_view_status="Pending"
                 else
-                    indices_status=Pening
-                    data_view_status=Pening
+                    indices_status="Done"
                 fi
+
                 # Append per index details to CSV
                 echo "$es_index_name, $health, $status, $uuid, $pri, $rep, $docs_count, $docs_deleted, $pri_store_size, $rep_store_size, $indices_status" >>"$indices_report_file"
 
@@ -1317,7 +1314,7 @@ report() {
                 total_docs_count=$((total_docs_count + docs_count))
                 total_storage_size=$((total_storage_size + index_store_size_bytes))
             fi
-        done
+        done < <(jq -c '.indices[]' "$indices_json_file") # Process substitution
 
         # Debug: Show the total counts for the data view
         echo "Data View $title - Total Docs: $total_docs_count, Total Storage Size: $total_storage_size bytes"
