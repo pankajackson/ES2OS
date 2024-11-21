@@ -983,61 +983,10 @@ verify_indices() {
     # Check the report file for the current data view's status
     local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f9 | tr -d ' ')
 
-    if [[ -n "$status" ]]; then
-        # If status is "Done" or "Skipped", skip processing
-        if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
-            echo "Index $index is already processed. Skipping..."
-            return 1
-        fi
-    else
-        os_response=$(curl -s -w "%{http_code}" --insecure -u "$OS_USERNAME:$OS_PASSWORD" \
-            "$OS_ENDPOINT/_cat/indices/$index?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
-
-        http_code="${os_response: -3}"        # Extract last 3 characters as HTTP status code
-        raw_indices_list="${os_response%???}" # Remove last 3 characters to get the actual response body
-
-        # Check if the request was successful
-        if [[ "$http_code" -ne 200 && "$http_code" -ne 404 ]]; then
-            echo "Failed to fetch index information for Opensearch index $index. HTTP code: $http_code"
-            return 1
-        fi
-
-        # Extract document count from the response for opensearch
-        if [[ "$http_code" -eq 404 ]]; then
-            echo "Index $index not found in Opensearch. HTTP code: $http_code"
-            # Handle as needed when the index is not found
-            os_docs_count=0
-            echo "Opensearch document count for index $index: $os_docs_count"
-        else
-            os_docs_count=$(echo "$raw_indices_list" | awk '{print $7}') # Assuming docs.count is the 7th column
-            if [[ -z "$os_docs_count" ]]; then
-                echo "Document count for index $index is unavailable or empty."
-                return 1
-            else
-                echo "Opensearch document count for index $index: $os_docs_count"
-            fi
-        fi
-
-        # Extract document count from the response for opensearch
-        es_docs_count=0
-        while IFS= read -r index_entry; do
-            indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
-            indices_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
-
-            if [[ "$indices_uuid" == "$uuid" ]]; then
-                es_docs_count=$indices_docs_count
-                break
-            fi
-        done < <(jq -c '.indices[]' "$indices_list_file") # Process substitution avoids a subshell
-
-        echo "Elasticsearch document count for index $index: $es_docs_count"
-
-        if [[ "$os_docs_count" -ge "$es_docs_count" ]]; then
-            echo "Opensearch document count ($os_docs_count) is greater than or equal to Elasticsearch document count ($es_docs_count). Skipping index $index."
-            update_indices_report "$uuid" "Done"
-            return 1
-        fi
-
+    # If status is "Done" or "Skipped", skip processing
+    if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
+        echo "Index $index is already processed. Skipping..."
+        return 1
     fi
 
     # Skip system indexes if configured to do so
@@ -1060,6 +1009,63 @@ verify_indices() {
     if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$index" | grep -q "200"; then
         echo "Index $index does not exist. Skipping this data view."
         update_indices_report "$uuid" "Skipped"
+        return 1
+    fi
+
+    # Check in opensearch if indices already exist
+    match_with_os() {
+        os_response=$(curl -s -w "%{http_code}" --insecure -u "$OS_USERNAME:$OS_PASSWORD" \
+            "$OS_ENDPOINT/_cat/indices/$index?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+
+        http_code="${os_response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${os_response%???}" # Remove last 3 characters to get the actual response body
+
+        # Check if the request was successful
+        if [[ "$http_code" -ne 200 && "$http_code" -ne 404 ]]; then
+            echo "Failed to fetch index information for Opensearch index $index. HTTP code: $http_code"
+            update_indices_report "$uuid" "Failed"
+            return 1
+        fi
+
+        # Extract document count from the response for opensearch
+        if [[ "$http_code" -eq 404 ]]; then
+            echo "Index $index not found in Opensearch. HTTP code: $http_code"
+            os_docs_count=0
+            echo "Opensearch document count for index $index: $os_docs_count"
+        else
+            os_docs_count=$(echo "$raw_indices_list" | awk '{print $7}') # Assuming docs.count is the 7th column
+            if [[ -z "$os_docs_count" ]]; then
+                echo "Document count for index $index is unavailable or empty."
+                update_indices_report "$uuid" "Failed"
+                return 1
+            else
+                echo "Opensearch document count for index $index: $os_docs_count"
+            fi
+        fi
+
+        # Extract document count from the response for opensearch
+        es_docs_count=0
+        while IFS= read -r index_entry; do
+            indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
+            indices_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+
+            if [[ "$indices_uuid" == "$uuid" ]]; then
+                es_docs_count=$indices_docs_count
+                break
+            fi
+        done < <(jq -c '.indices[]' "$indices_list_file") # Process substitution avoids a subshell
+
+        echo "Elasticsearch document count for index $index: $es_docs_count"
+
+        if [[ "$os_docs_count" -ge "$es_docs_count" ]]; then
+            echo "Skipping index $index: OpenSearch docs ($os_docs_count) >= Elasticsearch docs ($es_docs_count)."
+            update_indices_report "$uuid" "Done"
+            return 1
+        fi
+
+    }
+
+    if ! match_with_os; then
         return 1
     fi
 
