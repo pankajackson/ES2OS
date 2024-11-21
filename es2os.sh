@@ -69,7 +69,7 @@ setup_variables() {
     DATAVIEW_DIR="$OUTPUT_DIR/dataviews"
     mkdir -p "$DATAVIEW_DIR"
     DATAVIEW_FILE="$DATAVIEW_DIR/dataviews.json"
-    REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
+    DATAVIEW_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
 
     INDICES_DIR="$DATAVIEW_DIR/indices"
     mkdir -p "$INDICES_DIR"
@@ -89,6 +89,9 @@ setup_variables() {
     mkdir -p "$LOGS_DIR"
     LOG_FILE="$LOGS_DIR/$(date '+%Y-%m-%d-%H-%M-%S').log"
     CURRENT_LOG_FILE="$LOGS_DIR/current.log"
+
+    REPORT_DIR="$OUTPUT_DIR/report"
+    mkdir -p "$REPORT_DIR"
 
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
@@ -836,8 +839,8 @@ fetch_dataviews() {
 # Initialize report file with all data views marked as UnProcessed
 generate_initial_report() {
     # Initialize the report file if it doesn't exist
-    if [[ ! -f "$REPORT_FILE" ]]; then
-        echo "sid, id, Data View, Index Pattern, Status" >"$REPORT_FILE"
+    if [[ ! -f "$DATAVIEW_REPORT_FILE" ]]; then
+        echo "sid, id, Data View, Index Pattern, Status" >"$DATAVIEW_REPORT_FILE"
     fi
 
     # Add all data views to the report with "UnProcessed" status
@@ -846,8 +849,8 @@ generate_initial_report() {
         name=$(echo "$row" | jq -r '.name')
         title=$(echo "$row" | jq -r '.title')
         sid=$(sanitize_name "$id")
-        if ! grep -q "^$sid," "$REPORT_FILE"; then
-            echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
+        if ! grep -q "^$sid," "$DATAVIEW_REPORT_FILE"; then
+            echo "$sid, $id, $name, $title, UnProcessed" >>"$DATAVIEW_REPORT_FILE"
         fi
 
         indices_json_file="$INDICES_DIR/$sid.json"
@@ -873,17 +876,17 @@ update_report() {
     local status=$4
     local sid=$(sanitize_name "$id")
 
-    if grep -q "^$sid," "$REPORT_FILE"; then
-        sed -i "s/^$sid,.*/$sid, $id, $name, $index_pattern, $status/" "$REPORT_FILE"
+    if grep -q "^$sid," "$DATAVIEW_REPORT_FILE"; then
+        sed -i "s/^$sid,.*/$sid, $id, $name, $index_pattern, $status/" "$DATAVIEW_REPORT_FILE"
     else
-        echo "$sid, $id, $name, $index_pattern, $status" >>"$REPORT_FILE"
+        echo "$sid, $id, $name, $index_pattern, $status" >>"$DATAVIEW_REPORT_FILE"
     fi
 
     # Backup strategy: Create backup only if 15 minutes have passed since the last backup
     BKP_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
     if [[ ! -f "$BKP_REPORT_FILE" || $(find "$DATAVIEW_DIR" -name "dataviews_migration_report-*.csv" -mmin +15 | wc -l) -gt 0 ]]; then
-        cp "$REPORT_FILE" "$BKP_REPORT_FILE"
-        cp "$REPORT_FILE" "$DATAVIEW_DIR/dataviews_migration_report-latest.csv"
+        cp "$DATAVIEW_REPORT_FILE" "$BKP_REPORT_FILE"
+        cp "$DATAVIEW_REPORT_FILE" "$DATAVIEW_DIR/dataviews_migration_report-latest.csv"
         echo "Backup created for Data view Report: $BKP_REPORT_FILE"
     fi
 }
@@ -896,7 +899,7 @@ verify_dataview() {
     local sid=$(sanitize_name "$id")
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$sid," "$REPORT_FILE" | cut -d ',' -f5 | tr -d ' ')
+    local status=$(grep -E "^$sid," "$DATAVIEW_REPORT_FILE" | cut -d ',' -f5 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
@@ -1201,19 +1204,129 @@ migrate() {
 }
 
 report() {
+
+    local dataview_report_file="$REPORT_DIR/dataview.csv"
+    local indices_report_file="$REPORT_DIR/indices.csv"
+
+    # Helper function to convert human-readable sizes to bytes
+    convert_to_bytes() {
+        local size_str="$1"
+        local num=$(echo "$size_str" | sed -E 's/[^0-9.]//g')
+        local unit=$(echo "$size_str" | sed -E 's/[0-9.]//g' | tr '[:upper:]' '[:lower:]')
+
+        case "$unit" in
+        kb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024}")" ;;
+        mb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024 * 1024}")" ;;
+        gb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024 * 1024 * 1024}")" ;;
+        tb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024 * 1024 * 1024 * 1024}")" ;;
+        *) echo "$num" ;; # Assume bytes if no unit
+        esac
+    }
+
+    # Fetch OS Details
+    get_opensearch_indices_details() {
+        os_response=$(curl -s -w "%{http_code}" --insecure -u "$OS_USERNAME:$OS_PASSWORD" \
+            "$OS_ENDPOINT/_cat/indices?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+
+        http_code="${os_response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${os_response%???}" # Remove last 3 characters to get the actual response body
+
+        # Check if the request was successful
+        if [[ "$http_code" -ne 200 && "$http_code" -ne 404 ]]; then
+            echo "Failed to fetch indices information for Opensearch. HTTP code: $http_code"
+            return 1
+        fi
+        echo "$raw_indices_list"
+    }
+
+    # Fetch OpenSearch Indices Details
+    opensearch_indices=$(get_opensearch_indices_details)
+    if [[ -z "$opensearch_indices" ]]; then
+        echo "No OpenSearch indices found or unable to fetch data."
+        return 1
+    fi
+
+    # Fetch Data Views (Assumed to be JSON file with an array)
     fetch_dataviews || {
         echo "Error while fetching Data Views"
         exit 1
     }
+
+    # Prepare CSV headers
+    echo "DataView_ID, DataView_Name, Title, Total_Document_Count, Total_Storage_Size, Status" >"$dataview_report_file"
+    echo "Index,Health, Status,UUID, Primary_Shard_Count, Replica_Shard_Count, Doc_Count, Deleted_Docs, Primary_Storage_Size, Replica_Storage_Size, Status" >"$indices_report_file"
+
+    # Process each DataView and generate reports
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         name=$(echo "$row" | jq -r '.name')
         title=$(echo "$row" | jq -r '.title')
+        sid=$(sanitize_name "$id")
+
+        indices_json_file="$INDICES_DIR/$sid.json"
+
+        # Fetch indices for data view
         if ! fetch_indices "$id" "$name" "$title"; then
-            echo "Error: Failed to fetch Indices details for data view $title"
-            exit 1
+            echo "Error: Failed to fetch Indices details for Data View: $title"
+            continue
         fi
+
+        total_docs_count=0
+        total_storage_size=0
+        data_view_status=Done
+        # Parse indices list and match with the data view
+        jq -c '.indices[]' "$indices_json_file" | while read -r index_entry; do
+            es_index_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
+            es_index_uuid=$(echo "$index_entry" | jq -r '.UUID')
+            es_index_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+            es_index_store_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
+
+            # Convert store size to bytes
+            index_store_size_bytes=$(convert_to_bytes "$es_index_store_size")
+
+            # Debug: Check if data is being correctly extracted
+            echo "Processing index: $es_index_name with docs_count: $es_index_docs_count and store_size: $index_store_size_bytes bytes"
+
+            # Check for matching index UUID from OpenSearch
+            index_details=$(echo "$opensearch_indices" | grep -w "$es_index_name")
+            if [[ -n "$index_details" ]]; then
+                health=$(echo "$index_details" | awk '{print $2}')
+                status=$(echo "$index_details" | awk '{print $3}')
+                uuid=$(echo "$index_details" | awk '{print $4}')
+                pri=$(echo "$index_details" | awk '{print $5}')
+                rep=$(echo "$index_details" | awk '{print $6}')
+                docs_count=$(echo "$index_details" | awk '{print $7}')
+                docs_deleted=$(echo "$index_details" | awk '{print $8}')
+                pri_store_size=$(echo "$index_details" | awk '{print $9}')
+                rep_store_size=$(echo "$index_details" | awk '{print $10}')
+
+                if [[ $docs_count -ge $es_index_docs_count ]]; then
+                    indices_status=Done
+                    data_view_status=Pening
+                else
+                    indices_status=Pening
+                    data_view_status=Pening
+                fi
+                # Append per index details to CSV
+                echo "$es_index_name, $health, $status, $uuid, $pri, $rep, $docs_count, $docs_deleted, $pri_store_size, $rep_store_size, $indices_status" >>"$indices_report_file"
+
+                # Debug: Show index details
+                echo "Appended index: $es_index_name with docs_count: $docs_count to the indices report."
+
+                # Aggregate data for data view summary
+                total_docs_count=$((total_docs_count + docs_count))
+                total_storage_size=$((total_storage_size + index_store_size_bytes))
+            fi
+        done
+
+        # Debug: Show the total counts for the data view
+        echo "Data View $title - Total Docs: $total_docs_count, Total Storage Size: $total_storage_size bytes"
+
+        # Append per data view summary to CSV
+        echo "$id, $name, $title, $total_docs_count, $total_storage_size, $data_view_status" >>"$dataview_report_file"
     done
+
+    echo "Report generated successfully."
 }
 
 # Main function to run the steps in sequence
