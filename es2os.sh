@@ -173,6 +173,70 @@ get_master_processes() {
     return 0 # Indicate success
 }
 
+get_indices_detail_by_id() {
+    local uuid=$1
+
+    if [[ -n "$uuid" ]]; then
+        indices_json_file=$(grep -rl --include="*.json" "$uuid" "$INDICES_DIR" | head -n 1)
+        if [[ -f "$indices_json_file" ]]; then
+            # Extract root-level details
+            local sid data_view index_pattern
+            sid=$(jq -r '.sid' "$indices_json_file")
+            data_view=$(jq -r '.["Data View"]' "$indices_json_file")
+            index_pattern=$(jq -r '.["Index Pattern"]' "$indices_json_file")
+
+            # Search for the UUID in the indices array
+            while IFS= read -r index_entry; do
+                indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
+                if [[ "$indices_uuid" == "$uuid" ]]; then
+                    local indices_name health index_status doc_count primary_data_size store_size
+                    indices_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
+                    health=$(echo "$index_entry" | jq -r '.Health')
+                    index_status=$(echo "$index_entry" | jq -r '.["Index Status"]')
+                    doc_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+                    primary_data_size=$(echo "$index_entry" | jq -r '.["Primary Data Size"]')
+                    store_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
+
+                    # Construct raw JSON output
+                    local raw_json
+                    raw_json=$(jq -n --arg sid "$sid" \
+                        --arg data_view "$data_view" \
+                        --arg index_pattern "$index_pattern" \
+                        --arg uuid "$indices_uuid" \
+                        --arg index_name "$indices_name" \
+                        --arg health "$health" \
+                        --arg index_status "$index_status" \
+                        --arg doc_count "$doc_count" \
+                        --arg primary_data_size "$primary_data_size" \
+                        --arg store_size "$store_size" \
+                        '{
+                                          "UUID": $uuid,
+                                          "SID": $sid,
+                                          "Data View": $data_view,
+                                          "Index Pattern": $index_pattern,
+                                          "Index Name": $index_name,
+                                          "Health": $health,
+                                          "Index Status": $index_status,
+                                          "Doc Count": $doc_count,
+                                          "Primary Data Size": $primary_data_size,
+                                          "Store Size": $store_size
+                                      }')
+
+                    # Echo raw JSON
+                    echo "$raw_json"
+                    return 0
+                fi
+            done < <(jq -c '.indices[]' "$indices_json_file")
+        else
+            echo "Error: JSON file for UUID $uuid not found in $INDICES_DIR." >&2
+            return 1
+        fi
+    else
+        echo "Error: UUID is not provided." >&2
+        return 1
+    fi
+}
+
 # Monitoring function
 status() {
     # Temporarily disable `set -e` for this function
@@ -208,18 +272,17 @@ status() {
         fi
 
         if [[ -n "$INDICES_UUID" ]]; then
-            indices_json_file=$(grep -rl --include="*.json" "$INDICES_UUID" "$INDICES_DIR" | head -n 1)
-            echo "Indices JSON File: $indices_json_file"
-
-            while IFS= read -r index_entry; do
-                indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
-                if [[ "$indices_uuid" == "$INDICES_UUID" ]]; then
-                    indices_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
-                    indices_docs=$(echo "$index_entry" | jq -r '.["Doc Count"]')
-                    indices_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
-                    break
-                fi
-            done < <(jq -c '.indices[]' "$indices_json_file")
+            echo "Fetching Index Details for UUID: $INDICES_UUID"
+            indices_details=$(get_indices_detail_by_id "$INDICES_UUID")
+            if [[ -n "$indices_details" ]]; then
+                indices_name=$(echo "$indices_details" | jq -r '.["Index Name"]' 2>/dev/null)
+                indices_docs=$(echo "$indices_details" | jq -r '.["Doc Count"]' 2>/dev/null)
+                indices_size=$(echo "$indices_details" | jq -r '.["Store Size"]' 2>/dev/null)
+            else
+                echo "Failed to fetch index details for UUID: $INDICES_UUID"
+            fi
+        else
+            echo "No UUID found for Logstash PID: $PID"
         fi
 
         echo "Index Info:"
@@ -855,8 +918,8 @@ update_indices_report() {
     local uuid="$1"
     local status="$2"
 
-    if [[ -z "$uuid" || -z "$status" || ! -f "$INDICES_REPORT_FILE" ]]; then
-        echo "Error: UUID, status, or report file is missing."
+    if [[ -z "$uuid" || -z "$status" ]]; then
+        echo "Error: UUID or status is missing."
         return 1
     fi
 
@@ -864,17 +927,37 @@ update_indices_report() {
     local current_time
     current_time=$(date +"%Y-%m-%d %H:%M:%S")
 
-    # Update Status, Last Update, and Start Time if empty, based on UUID
-    awk -v uuid="$uuid" -v status="$status" -v current_time="$current_time" '
-        BEGIN { FS = OFS = ", " }                     # Set field separator (FS) and output field separator (OFS) to comma
-        NR == 1 { print; next }                      # Print the header line as is
-        $1 == uuid {                                 # Check if UUID matches
-            $9 = status                              # Update the Status field (7th column)
-            $8 = current_time                        # Always update Last Update field (6th column)
-            if ($7 == "") $7 = current_time          # Update Start Time (5th column) only if it is empty
+    if [[ ! -f "$INDICES_REPORT_FILE" || ! -s "$INDICES_REPORT_FILE" ]]; then
+        echo "Warning: Report file is missing or blank. Generating..."
+        echo "uuid, sid, Index Pattern, Index, Doc Count, Primary Data Size, Start Time, Last Update, Status" >"$INDICES_REPORT_FILE"
+    fi
+
+    # Check if UUID exists in the file
+    if grep -q "^$uuid, " "$INDICES_REPORT_FILE"; then
+        # Update Status, Last Update, and Start Time if empty
+        awk -v uuid="$uuid" -v status="$status" -v current_time="$current_time" '
+        BEGIN { FS = OFS = ", " }
+        NR == 1 { print; next }  # Print the header line
+        $1 == uuid {
+            $9 = status            # Update Status
+            $8 = current_time      # Update Last Update
+            if ($7 == "") $7 = current_time  # Update Start Time only if empty
         }
-        { print }                                    # Print all lines (modified or not)
+        { print }                  # Print all lines
     ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
+    else
+        indices_details=$(get_indices_detail_by_id "$uuid")
+        if [[ -n "$indices_details" ]]; then
+            sid=$(echo "$indices_details" | jq -r '.SID' 2>/dev/null)
+            index_pattern=$(echo "$indices_details" | jq -r '.SID' 2>/dev/null)
+            index=$(echo "$indices_details" | jq -r '.["Index Name"]' 2>/dev/null)
+            doc_count=$(echo "$indices_details" | jq -r '.["Doc Count"]' 2>/dev/null)
+            primary_data_size=$(echo "$indices_details" | jq -r '.["Store Size"]' 2>/dev/null)
+        else
+            echo "Failed to fetch index details for UUID: $INDICES_UUID"
+        fi
+        echo "$uuid, $sid, $index_pattern, $index, $doc_count, $primary_data_size, $current_time, $current_time, $status" >>"$INDICES_REPORT_FILE"
+    fi
 
     # Backup Report in every Change
     BKP_INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
