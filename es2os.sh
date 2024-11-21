@@ -180,7 +180,9 @@ status() {
 
     local LOGSTASH_PIDS
     LOGSTASH_PIDS=$(get_logstash_processes)
-    if [ $? -ne 0 ]; then
+
+    # Check if there are no Logstash processes
+    if [[ -z "$LOGSTASH_PIDS" ]]; then
         echo "No Logstash processes found."
         return
     fi
@@ -202,52 +204,57 @@ status() {
         echo "Data Path: ${PATH_DATA:-Unavailable}"
 
         if [[ -n "$PATH_DATA" ]]; then
-            if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
-                echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
-            else
-                INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
-                INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
-                INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
-                INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
-
-                echo "Index Info:"
-                echo "  UUID:   ${INDICES_UUID}"
-                echo "  Name:   ${INDICES_NAME:-Unknown}"
-                echo "  Docs:   ${INDICES_DOCS:-Unknown}"
-                echo "  Size:   ${INDICES_SIZE:-Unknown}"
-            fi
+            INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
         fi
 
+        if [[ -n "$INDICES_UUID" ]]; then
+            indices_json_file=$(grep -rl --include="*.json" "$INDICES_UUID" "$INDICES_DIR" | head -n 1)
+            echo "File: $indices_json_file"
+
+            while IFS= read -r index_entry; do
+                indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
+                if [[ "$indices_uuid" == "$INDICES_UUID" ]]; then
+                    indices_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
+                    indices_docs=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+                    indices_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
+                    break
+                fi
+            done < <(jq -c '.indices[]' "$indices_json_file")
+        fi
+
+        echo "Index Info:"
+        echo "  UUID:   ${INDICES_UUID}"
+        echo "  Name:   ${indices_name:-Unknown}"
+        echo "  Docs:   ${indices_docs:-Unknown}"
+        echo "  Size:   ${indices_size:-Unknown}"
+
+        # Fetch pipeline stats from Logstash
         ls_endpoint="http://localhost:$PORT"
         PIPELINE_STATE=$(curl -s "$ls_endpoint/_node/stats/pipelines")
-        if [[ -z "$PIPELINE_STATE" ]]; then
-            echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
+        PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
+        PIPELINE_BATCH_SIZE=$(echo "$PIPELINE_STATE" | jq -r .pipeline.batch_size 2>/dev/null)
+        PIPELINE_WORKER=$(echo "$PIPELINE_STATE" | jq -r .pipeline.workers 2>/dev/null)
+        PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
+        PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
+
+        if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
+            PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
         else
-            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
-            PIPELINE_BATCH_SIZE=$(echo "$PIPELINE_STATE" | jq -r .pipeline.batch_size 2>/dev/null)
-            PIPELINE_WORKER=$(echo "$PIPELINE_STATE" | jq -r .pipeline.workers 2>/dev/null)
-            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
-            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
-
-            if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
-                PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
-            else
-                PIPELINE_RATE=0
-            fi
-
-            if [ "${INDICES_DOCS:-0}" -eq 0 ]; then
-                PERCENTAGE=0
-            else
-                PERCENTAGE=$(awk "BEGIN { printf \"%.2f\", ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-1} * 100 }")
-            fi
-
-            echo "Pipeline Info:"
-            echo "  Status:     ${PIPELINE_STATUS:-Unavailable}"
-            echo "  Batch Size: ${PIPELINE_BATCH_SIZE:-Unavailable}"
-            echo "  Workers:    ${PIPELINE_WORKER:-Unavailable}"
-            echo "  Out:        ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0} (${PERCENTAGE}%)"
-            echo "  Rate:       ${PIPELINE_RATE:-0.00} events/sec"
+            PIPELINE_RATE=0
         fi
+
+        if [[ "${indices_docs:-0}" -eq 0 ]]; then
+            PERCENTAGE=0
+        else
+            PERCENTAGE=$(awk "BEGIN { printf \"%.2f\", ${PIPELINE_OUT:-0} / ${indices_docs:-1} * 100 }")
+        fi
+
+        echo "Pipeline Info:"
+        echo "  Status:     ${PIPELINE_STATUS:-Unavailable}"
+        echo "  Batch Size: ${PIPELINE_BATCH_SIZE:-Unavailable}"
+        echo "  Workers:    ${PIPELINE_WORKER:-Unavailable}"
+        echo "  Out:        ${PIPELINE_OUT:-0} / ${indices_docs:-0} (${PERCENTAGE}%)"
+        echo "  Rate:       ${PIPELINE_RATE:-0.00} events/sec"
 
         sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
             awk 'NR > 1 {
