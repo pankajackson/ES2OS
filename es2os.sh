@@ -209,7 +209,7 @@ status() {
 
         if [[ -n "$INDICES_UUID" ]]; then
             indices_json_file=$(grep -rl --include="*.json" "$INDICES_UUID" "$INDICES_DIR" | head -n 1)
-            echo "File: $indices_json_file"
+            echo "Indices JSON File: $indices_json_file"
 
             while IFS= read -r index_entry; do
                 indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
