@@ -701,102 +701,104 @@ fetch_indices() {
     local sid=$(sanitize_name "$id")
     local indices_json_file="$INDICES_DIR/$sid.json"
 
-    echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
+    if [[ ! -f "$indices_json_file" ]]; then
 
-    # Fetch the list of indices and capture the HTTP status code
-    response=$(curl -s -w "%{http_code}" $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" \
-        "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+        echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
 
-    http_code="${response: -3}"        # Extract last 3 characters as HTTP status code
-    raw_indices_list="${response%???}" # Remove last 3 characters to get the actual response body
+        # Fetch the list of indices and capture the HTTP status code
+        response=$(curl -s -w "%{http_code}" $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" \
+            "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
 
-    # Check if the HTTP status indicates a failure
-    if [[ "$http_code" -ne 200 ]]; then
-        echo "Error: Failed to fetch indices for data view $title. HTTP Status: $http_code"
+        http_code="${response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${response%???}" # Remove last 3 characters to get the actual response body
 
-        # Check if the error response is valid JSON
-        if echo "$raw_indices_list" | jq . >/dev/null 2>&1; then
-            # If JSON, include it directly in the error field
-            jq -n --arg sid "$sid" \
-                --arg name "$name" \
-                --arg title "$title" \
-                --argjson error "$raw_indices_list" \
-                '{
+        # Check if the HTTP status indicates a failure
+        if [[ "$http_code" -ne 200 ]]; then
+            echo "Error: Failed to fetch indices for data view $title. HTTP Status: $http_code"
+
+            # Check if the error response is valid JSON
+            if echo "$raw_indices_list" | jq . >/dev/null 2>&1; then
+                # If JSON, include it directly in the error field
+                jq -n --arg sid "$sid" \
+                    --arg name "$name" \
+                    --arg title "$title" \
+                    --argjson error "$raw_indices_list" \
+                    '{
                       sid: $sid,
                       "Data View": $name,
                       "Index Pattern": $title,
                       indices: [],
                       error: $error
                   }' >"$indices_json_file"
-        else
-            # If not JSON, treat it as a string
-            jq -n --arg sid "$sid" \
-                --arg name "$name" \
-                --arg title "$title" \
-                --arg error "Failed to fetch indices: HTTP Status $http_code - $raw_indices_list" \
-                '{
+            else
+                # If not JSON, treat it as a string
+                jq -n --arg sid "$sid" \
+                    --arg name "$name" \
+                    --arg title "$title" \
+                    --arg error "Failed to fetch indices: HTTP Status $http_code - $raw_indices_list" \
+                    '{
                       sid: $sid,
                       "Data View": $name,
                       "Index Pattern": $title,
                       indices: [],
                       error: $error
                   }' >"$indices_json_file"
+            fi
+            return
         fi
-        return
-    fi
 
-    # Check if indices were returned (empty response means no indices)
-    if [[ -z "$raw_indices_list" ]]; then
-        echo "No indices found for data view $title. Saving empty indices list to JSON file."
+        # Check if indices were returned (empty response means no indices)
+        if [[ -z "$raw_indices_list" ]]; then
+            echo "No indices found for data view $title. Saving empty indices list to JSON file."
 
-        # Save JSON with empty indices and no error
-        jq -n --arg sid "$sid" \
-            --arg name "$name" \
-            --arg title "$title" \
-            '{
+            # Save JSON with empty indices and no error
+            jq -n --arg sid "$sid" \
+                --arg name "$name" \
+                --arg title "$title" \
+                '{
                   sid: $sid,
                   "Data View": $name,
                   "Index Pattern": $title,
                   indices: []
               }' >"$indices_json_file"
-        return
-    fi
+            return
+        fi
 
-    # Initialize the JSON file structure for successful fetch
-    jq -n --arg sid "$sid" \
-        --arg name "$name" \
-        --arg title "$title" \
-        '{
+        # Initialize the JSON file structure for successful fetch
+        jq -n --arg sid "$sid" \
+            --arg name "$name" \
+            --arg title "$title" \
+            '{
               sid: $sid,
               "Data View": $name,
               "Index Pattern": $title,
               indices: []
           }' >"$indices_json_file"
 
-    # Append each index entry into the JSON structure using jq
-    while IFS= read -r line; do
+        # Append each index entry into the JSON structure using jq
+        while IFS= read -r line; do
 
-        # Check if the line is empty or only contains whitespace
-        [[ -z "$line" ]] && continue
+            # Check if the line is empty or only contains whitespace
+            [[ -z "$line" ]] && continue
 
-        read -ra columns <<<"$line"
-        uuid="${columns[3]}"
-        index_name="${columns[0]}"
-        health="${columns[1]}"
-        index_status="${columns[2]}"
-        doc_count="${columns[6]}"
-        primary_data_size="${columns[9]}"
-        store_size="${columns[8]}"
+            read -ra columns <<<"$line"
+            uuid="${columns[3]}"
+            index_name="${columns[0]}"
+            health="${columns[1]}"
+            index_status="${columns[2]}"
+            doc_count="${columns[6]}"
+            primary_data_size="${columns[9]}"
+            store_size="${columns[8]}"
 
-        # Append index data to the indices array in the JSON file
-        jq --arg uuid "$uuid" \
-            --arg index_name "$index_name" \
-            --arg health "$health" \
-            --arg index_status "$index_status" \
-            --arg doc_count "$doc_count" \
-            --arg primary_data_size "$primary_data_size" \
-            --arg store_size "$store_size" \
-            '.indices += [{
+            # Append index data to the indices array in the JSON file
+            jq --arg uuid "$uuid" \
+                --arg index_name "$index_name" \
+                --arg health "$health" \
+                --arg index_status "$index_status" \
+                --arg doc_count "$doc_count" \
+                --arg primary_data_size "$primary_data_size" \
+                --arg store_size "$store_size" \
+                '.indices += [{
                UUID: $uuid,
                "Index Name": $index_name,
                Health: $health,
@@ -806,7 +808,8 @@ fetch_indices() {
                "Store Size": $store_size
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
-    done <<<"$raw_indices_list"
+        done <<<"$raw_indices_list"
+    fi
 
     # Generate Initial Indices Report
     if ! generate_initial_indices_report "$indices_json_file"; then
