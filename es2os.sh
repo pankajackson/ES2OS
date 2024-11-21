@@ -893,8 +893,6 @@ update_report() {
             echo "Error: Data view report file does not exist: $DATAVIEW_REPORT_FILE"
             exit 1
         fi
-    else
-        echo "Files matching the pattern were created in the last 15 minutes. No backup needed."
     fi
 
 }
@@ -992,8 +990,6 @@ update_indices_report() {
             echo "Error: Indices report file does not exist: $INDICES_REPORT_FILE"
             exit 1
         fi
-    else
-        echo "Files matching the pattern were created in the last 15 minutes. No backup needed."
     fi
 
 }
