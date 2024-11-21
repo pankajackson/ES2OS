@@ -1046,7 +1046,7 @@ verify_indices() {
             fi
         fi
 
-        # Extract document count from the response for opensearch
+        # Extract document count from elasticsearch
         es_docs_count=0
         while IFS= read -r index_entry; do
             indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
