@@ -800,6 +800,14 @@ update_report() {
     else
         echo "$sid, $id, $name, $index_pattern, $status" >>"$REPORT_FILE"
     fi
+
+    # Backup strategy: Create backup only if 15 minutes have passed since the last backup
+    BKP_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
+    if [[ ! -f "$BKP_REPORT_FILE" || $(find "$DATAVIEW_DIR" -name "dataviews_migration_report-*.csv" -mmin +15 | wc -l) -gt 0 ]]; then
+        cp "$REPORT_FILE" "$BKP_REPORT_FILE"
+        cp "$REPORT_FILE" "$DATAVIEW_DIR/dataviews_migration_report-latest.csv"
+        echo "Backup created for Data view Report: $BKP_REPORT_FILE"
+    fi
 }
 
 # Verify if the data view should be processed or skipped
@@ -860,12 +868,23 @@ update_indices_report() {
         }
         { print }                                    # Print all lines (modified or not)
     ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
+
+    # Backup Report in every Change
+    BKP_INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
+
+    # Create backup only if 15 minutes have passed since the last backup
+    if [[ ! -f "$BKP_INDICES_REPORT_FILE" || $(find "$INDICES_DIR" -name "indices_migration_report-*.csv" -mmin +15 | wc -l) -gt 0 ]]; then
+        cp "$INDICES_REPORT_FILE" "$BKP_INDICES_REPORT_FILE"
+        cp "$INDICES_REPORT_FILE" "$INDICES_DIR/indices_migration_report-latest.csv"
+        echo "Backup created for Indices: $BKP_INDICES_REPORT_FILE"
+    fi
 }
 
 # Verify if the data view should be processed or skipped
 verify_indices() {
     local uuid=$1
     local index=$2
+    local indices_list_file=$3
     local original_ifs="$IFS"
     local normalized_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
     IFS=',' read -r -a patterns <<<"$normalized_patterns"
@@ -874,10 +893,61 @@ verify_indices() {
     # Check the report file for the current data view's status
     local status=$(grep -E "^$uuid," "$INDICES_REPORT_FILE" | cut -d ',' -f9 | tr -d ' ')
 
-    # If status is "Done" or "Skipped", skip processing
-    if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
-        echo "Indices $index is already processed. Skipping..."
-        return 1
+    if [[ -n "$status" ]]; then
+        # If status is "Done" or "Skipped", skip processing
+        if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
+            echo "Index $index is already processed. Skipping..."
+            return 1
+        fi
+    else
+        os_response=$(curl -s -w "%{http_code}" --insecure -u "$OS_USERNAME:$OS_PASSWORD" \
+            "$OS_ENDPOINT/_cat/indices/$index?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+
+        http_code="${os_response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${os_response%???}" # Remove last 3 characters to get the actual response body
+
+        # Check if the request was successful
+        if [[ "$http_code" -ne 200 && "$http_code" -ne 404 ]]; then
+            echo "Failed to fetch index information for Opensearch index $index. HTTP code: $http_code"
+            return 1
+        fi
+
+        # Extract document count from the response for opensearch
+        if [[ "$http_code" -eq 404 ]]; then
+            echo "Index $index not found in Opensearch. HTTP code: $http_code"
+            # Handle as needed when the index is not found
+            os_docs_count=0
+            echo "Opensearch document count for index $index: $os_docs_count"
+        else
+            os_docs_count=$(echo "$raw_indices_list" | awk '{print $7}') # Assuming docs.count is the 7th column
+            if [[ -z "$os_docs_count" ]]; then
+                echo "Document count for index $index is unavailable or empty."
+                return 1
+            else
+                echo "Opensearch document count for index $index: $os_docs_count"
+            fi
+        fi
+
+        # Extract document count from the response for opensearch
+        es_docs_count=0
+        while IFS= read -r index_entry; do
+            indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
+            indices_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+
+            if [[ "$indices_uuid" == "$uuid" ]]; then
+                es_docs_count=$indices_docs_count
+                break
+            fi
+        done < <(jq -c '.indices[]' "$indices_list_file") # Process substitution avoids a subshell
+
+        echo "Elasticsearch document count for index $index: $es_docs_count"
+
+        if [[ "$os_docs_count" -ge "$es_docs_count" ]]; then
+            echo "Opensearch document count ($os_docs_count) is greater than or equal to Elasticsearch document count ($es_docs_count). Skipping index $index."
+            update_indices_report "$uuid" "Done"
+            return 1
+        fi
+
     fi
 
     # Skip system indexes if configured to do so
@@ -942,7 +1012,7 @@ process_dataview() {
         index_status=$(echo "$row" | jq -r '.["Index Status"]')
 
         if [[ "$index_status" == "open" ]]; then
-            if verify_indices "$uuid" "$index"; then
+            if verify_indices "$uuid" "$index" "$indices_list_file"; then
                 # Process the index in the background
                 process_indices "$uuid" "$index" &
 
