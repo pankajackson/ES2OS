@@ -883,12 +883,20 @@ update_report() {
     fi
 
     # Backup strategy: Create backup only if 15 minutes have passed since the last backup
-    BKP_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
-    if [[ ! -f "$BKP_REPORT_FILE" || $(find "$DATAVIEW_DIR" -name "dataviews_migration_report-*.csv" -mmin +15 | wc -l) -gt 0 ]]; then
-        cp "$DATAVIEW_REPORT_FILE" "$BKP_REPORT_FILE"
-        cp "$DATAVIEW_REPORT_FILE" "$DATAVIEW_DIR/dataviews_migration_report-latest.csv"
-        echo "Backup created for Data view Report: $BKP_REPORT_FILE"
+    BKP_DATAVIEW_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
+    if [[ $(find "$DATAVIEW_DIR" -name "dataviews_migration_report-*.csv" -mmin -15 | wc -l) -eq 0 ]]; then
+        if [[ -f "$DATAVIEW_REPORT_FILE" ]]; then
+            cp "$DATAVIEW_REPORT_FILE" "$BKP_DATAVIEW_REPORT_FILE"
+            cp "$DATAVIEW_REPORT_FILE" "$DATAVIEW_DIR/indices_migration_report-latest.csv"
+            echo "Backup created for Data view Report: $BKP_DATAVIEW_REPORT_FILE"
+        else
+            echo "Error: Data view report file does not exist: $DATAVIEW_REPORT_FILE"
+            exit 1
+        fi
+    else
+        echo "Files matching the pattern were created in the last 15 minutes. No backup needed."
     fi
+
 }
 
 # Verify if the data view should be processed or skipped
@@ -974,11 +982,20 @@ update_indices_report() {
     BKP_INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
 
     # Create backup only if 15 minutes have passed since the last backup
-    if [[ ! -f "$BKP_INDICES_REPORT_FILE" || $(find "$INDICES_DIR" -name "indices_migration_report-*.csv" -mmin +15 | wc -l) -gt 0 ]]; then
-        cp "$INDICES_REPORT_FILE" "$BKP_INDICES_REPORT_FILE"
-        cp "$INDICES_REPORT_FILE" "$INDICES_DIR/indices_migration_report-latest.csv"
-        echo "Backup created for Indices: $BKP_INDICES_REPORT_FILE"
+    if [[ $(find "$INDICES_DIR" -name "indices_migration_report-*.csv" -mmin -15 | wc -l) -eq 0 ]]; then
+        # No files created in the last 15 minutes
+        if [[ -f "$INDICES_REPORT_FILE" ]]; then
+            cp "$INDICES_REPORT_FILE" "$BKP_INDICES_REPORT_FILE"
+            cp "$INDICES_REPORT_FILE" "$INDICES_DIR/indices_migration_report-latest.csv"
+            echo "Backup created for Indices: $BKP_INDICES_REPORT_FILE"
+        else
+            echo "Error: Indices report file does not exist: $INDICES_REPORT_FILE"
+            exit 1
+        fi
+    else
+        echo "Files matching the pattern were created in the last 15 minutes. No backup needed."
     fi
+
 }
 
 # Verify if the data view should be processed or skipped
