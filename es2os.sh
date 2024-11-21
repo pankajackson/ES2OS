@@ -1252,25 +1252,26 @@ report() {
     }
 
     # Prepare CSV headers
-    echo "DataView_ID, DataView_Name, Title, Total_Document_Count, Total_Storage_Size, Status" >"$dataview_report_file"
-    echo "Index,Health, Status,UUID, Primary_Shard_Count, Replica_Shard_Count, Doc_Count, Deleted_Docs, Primary_Storage_Size, Replica_Storage_Size, Status" >"$indices_report_file"
+    echo "DataView_ID, DataView_Name, Title, Total_Document_Count, Total_Index_Count, Total_Storage_Size, Status" >"$dataview_report_file"
+    echo "Index_Uuid, Index_Pattern, Index, Doc_Count, Primary_Data_Size, Status" >"$indices_report_file"
 
     # Process each DataView and generate reports
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         name=$(echo "$row" | jq -r '.name')
-        title=$(echo "$row" | jq -r '.title')
+        index_pattern=$(echo "$row" | jq -r '.title')
         sid=$(sanitize_name "$id")
 
         indices_json_file="$INDICES_DIR/$sid.json"
 
         # Fetch indices for data view
-        if ! fetch_indices "$id" "$name" "$title"; then
-            echo "Error: Failed to fetch Indices details for Data View: $title"
+        if ! fetch_indices "$id" "$name" "$index_pattern"; then
+            echo "Error: Failed to fetch Indices details for Data View: $index_pattern"
             continue
         fi
 
         total_docs_count=0
+        total_index_count=0
         total_storage_size=0
         data_view_status="Done"
 
@@ -1278,7 +1279,7 @@ report() {
         while read -r index_entry; do
             es_index_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
             es_index_uuid=$(echo "$index_entry" | jq -r '.UUID')
-            es_index_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+            es_index_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"] // 0' | grep -E '^[0-9]+$' || echo 0)
             es_index_store_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
 
             # Convert store size to bytes
@@ -1305,22 +1306,25 @@ report() {
                 fi
 
                 # Append per index details to CSV
-                echo "$es_index_name, $health, $status, $uuid, $pri, $rep, $docs_count, $docs_deleted, $pri_store_size, $rep_store_size, $indices_status" >>"$indices_report_file"
-
-                # Debug: Show index details
-                echo "Appended index: $es_index_name with docs_count: $docs_count to the indices report."
+                if ! (grep -q "^$es_index_uuid," "$indices_report_file"); then
+                    echo "$es_index_uuid, $index_pattern, $es_index_name, $es_index_docs_count, $es_index_store_size, $indices_status" >>"$indices_report_file"
+                    echo "Appended index: $es_index_name with docs_count: $es_index_docs_count to the indices report."
+                fi
 
                 # Aggregate data for data view summary
-                total_docs_count=$((total_docs_count + docs_count))
+                total_docs_count=$((total_docs_count + es_index_docs_count))
+                total_index_count=$((total_index_count + 1))
                 total_storage_size=$((total_storage_size + index_store_size_bytes))
             fi
         done < <(jq -c '.indices[]' "$indices_json_file") # Process substitution
 
         # Debug: Show the total counts for the data view
-        echo "Data View $title - Total Docs: $total_docs_count, Total Storage Size: $total_storage_size bytes"
+        echo "Data View $index_pattern - Total Docs: $total_docs_count, Total Storage Size: $total_storage_size bytes"
 
         # Append per data view summary to CSV
-        echo "$id, $name, $title, $total_docs_count, $total_storage_size, $data_view_status" >>"$dataview_report_file"
+        if ! (grep -q "^$id," "$dataview_report_file"); then
+            echo "$id, $name, $index_pattern, $total_docs_count, $total_index_count, $total_storage_size, $data_view_status" >>"$dataview_report_file"
+        fi
     done
 
     echo "Report generated successfully."
