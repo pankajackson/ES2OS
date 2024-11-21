@@ -811,12 +811,6 @@ fetch_indices() {
         done <<<"$raw_indices_list"
     fi
 
-    # Generate Initial Indices Report
-    if ! generate_initial_indices_report "$indices_json_file"; then
-        echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
-        exit 1
-    fi
-
     echo "Indices details for data view $title saved to $indices_json_file"
 }
 
@@ -855,8 +849,19 @@ generate_initial_report() {
         if ! grep -q "^$sid," "$REPORT_FILE"; then
             echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
         fi
+
+        indices_json_file="$INDICES_DIR/$sid.json"
         # Fetch Indices List
-        fetch_indices "$id" "$name" "$title"
+        if ! fetch_indices "$id" "$name" "$title"; then
+            echo "Error: Failed to fetch Indices details for data view $title"
+            exit 1
+        else
+            # Generate Initial Indices Report
+            if ! generate_initial_indices_report "$indices_json_file"; then
+                echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
+                exit 1
+            fi
+        fi
     done
 }
 
@@ -1195,6 +1200,22 @@ migrate() {
     echo "Data migration complete."
 }
 
+report() {
+    fetch_dataviews || {
+        echo "Error while fetching Data Views"
+        exit 1
+    }
+    jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
+        id=$(echo "$row" | jq -r '.id')
+        name=$(echo "$row" | jq -r '.name')
+        title=$(echo "$row" | jq -r '.title')
+        if ! fetch_indices "$id" "$name" "$title"; then
+            echo "Error: Failed to fetch Indices details for data view $title"
+            exit 1
+        fi
+    done
+}
+
 # Main function to run the steps in sequence
 main() {
     daemon_mode=false
@@ -1263,6 +1284,9 @@ main() {
         ;;
     stop)
         stop_all_processes
+        ;;
+    report)
+        report
         ;;
     help)
         echo "Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
