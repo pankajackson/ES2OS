@@ -224,6 +224,7 @@ To set up environment-specific values, create an env.sh file in the root directo
 - `ES_PASS`: Elasticsearch password (default: `elastic`).
 - `ES_SSL`: Enable SSL for Elasticsearch (default: `true`).
 - `ES_CA_FILE`: Path to the Elasticsearch CA file. Uncomment and set if needed for SSL verification (default: `none`).
+- `ES_BATCH_SIZE`: Number of documents allowed to transfer in a single batch (default: `2000`).
 
 ### Kibana Configuration
 
@@ -240,12 +241,12 @@ To set up environment-specific values, create an env.sh file in the root directo
 
 ### Migration Configuration
 
-- `BATCH_SIZE`: Number of documents to transfer in a single batch (default: `2000`).
 - `CONCURRENCY`: Number of parallel Logstash instances to process indices. (default: `4`).
 - `EXCLUDE_PATTERNS`: Comma-separated list of index patterns to exclude from migration (default: `none`).
 
 ### Optional Settings
 
+- `LS_BATCH_SIZE`: Size of batches the Logstash pipeline is to work in. (default: `125`).
 - `LS_JAVA_OPTS`: JVM options for Logstash. Uncomment and set if custom JVM settings are needed (default: `none`).
 - `CONFIG_CLEANUP`: Enable cleanup of Logstash configuration files after processing (default: `false`).
 - `DEBUG`: Enable debug output for detailed logs (default: `false`).
@@ -266,6 +267,7 @@ ES_USER="elastic"
 ES_PASS="elastic"
 ES_SSL=true
 # ES_CA_FILE="/path/to/elasticsearch-ca.pem"
+ES_BATCH_SIZE=2000
 
 # Kibana Configuration
 DATAVIEW_API_INSECURE=true
@@ -279,12 +281,12 @@ OS_SSL=true
 OS_SSL_CERT_VERIFY=false
 
 # Migration Configuration
-BATCH_SIZE=2000
 CONCURRENCY=4
 CONFIG_CLEANUP=false
 DEBUG=false
 EXCLUDE_PATTERNS=""
-# LS_JAVA_OPTS="-Xms1g -Xmx1g"
+LS_BATCH_SIZE=300
+LS_JAVA_OPTS="-Xms3g -Xmx3g"
 
 # Output Directory
 OUTPUT_DIR="./output_files"
