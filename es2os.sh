@@ -62,6 +62,10 @@ setup_variables() {
     OS_CA_FILE="${OS_CA_FILE:-}"
     OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
+    DATE_FIELD_KEY="${DATE_FIELD_KEY:-@timestamp}"
+    FILTER_DATE_FROM="${FILTER_DATE_FROM:-}"
+    FILTER_DATE_TO="${FILTER_DATE_TO:-}"
+
     # Define output directory and create it if it doesn't exist
     OUTPUT_DIR="${OUTPUT_DIR:-./output_files}"
     mkdir -p "$OUTPUT_DIR"
@@ -514,6 +518,34 @@ generate_logstash_config() {
     local sanitized_index=$(sanitize_name "$index")
     local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
 
+    # Configure query
+    get_query() {
+        if [[ -z "$FILTER_DATE_FROM" && -z "$FILTER_DATE_TO" ]]; then
+            QUERY='{"query":{"query_string":{"query":"*"}}}'
+        else
+            QUERY="{\"query\":{\"bool\":{\"must\":[{\"query_string\":{\"query\":\"*\"}},{\"range\":{\"$DATE_FIELD_KEY\":{"
+            RANGE_CLAUSES=()
+
+            if [[ -n "$FILTER_DATE_FROM" ]]; then
+                RANGE_CLAUSES+=("\"gte\":\"$FILTER_DATE_FROM\"")
+            fi
+
+            if [[ -n "$FILTER_DATE_TO" ]]; then
+                RANGE_CLAUSES+=("\"lte\":\"$FILTER_DATE_TO\"")
+            fi
+
+            # Join the range clauses with a comma
+            QUERY+=$(
+                IFS=','
+                echo "${RANGE_CLAUSES[*]}"
+            )
+            QUERY+="}}}]}}}"
+        fi
+        echo "$QUERY"
+    }
+
+    local query=$(get_query)
+
     # Generate Logstash configuration for the current data view
     cat <<EOF >"$config_file"
 input {
@@ -523,7 +555,7 @@ input {
         ssl => $ES_SSL
         password => "\${ES_PASSWORD}"
         index => "$index,-.*"
-        query => '{ "query": { "query_string": { "query": "*" } } }'
+        query => '$query'
         scroll => "5m"
         size => $ES_BATCH_SIZE
         docinfo => true
@@ -893,8 +925,6 @@ update_report() {
             echo "Error: Data view report file does not exist: $DATAVIEW_REPORT_FILE"
             exit 1
         fi
-    else
-        echo "Files matching the pattern were created in the last 15 minutes. No backup needed."
     fi
 
 }
@@ -992,8 +1022,6 @@ update_indices_report() {
             echo "Error: Indices report file does not exist: $INDICES_REPORT_FILE"
             exit 1
         fi
-    else
-        echo "Files matching the pattern were created in the last 15 minutes. No backup needed."
     fi
 
 }

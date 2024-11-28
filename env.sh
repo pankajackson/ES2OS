@@ -16,6 +16,10 @@ OS_SSL=true
 # OS_CA_FILE="/home/jackson/empty-ca.pem"
 OS_SSL_CERT_VERIFY=false
 
+DATE_FIELD_KEY="@timestamp"
+FILTER_DATE_FROM="1991-10-10"
+FILTER_DATE_TO=$(date -d "tomorrow" '+%Y-%m-%d')
+
 CONCURRENCY=4
 CONFIG_CLEANUP=false
 DEBUG=false
