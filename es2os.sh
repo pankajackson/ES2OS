@@ -41,6 +41,10 @@ setup_variables() {
         echo "Warning: Environment file $env_file_path not found. Using default values."
     fi
 
+    # Define Instance Details
+    INSTANCE_COUNT="${INSTANCE_COUNT:-1}"
+    INSTANCE_ID="${INSTANCE_ID:-1}"
+
     # Define default values for environment variables
     ES_ENDPOINT="${ES_HOST:-https://es.la.local:9200}"
     KB_ENDPOINT="${KB_HOST:-https://kb.la.local:5601}"
@@ -48,6 +52,7 @@ setup_variables() {
     ES_PASSWORD="${ES_PASS:-default_elastic_password}"
     ES_SSL="${ES_SSL:-true}"
     ES_CA_FILE="${ES_CA_FILE:-}"
+    ES_BATCH_SIZE="${ES_BATCH_SIZE:-2000}"
     DATAVIEW_API_INSECURE="${DATAVIEW_API_INSECURE:-true}"
 
     OS_ENDPOINT="${OS_HOST:-https://os.la.local:9200}"
@@ -57,6 +62,10 @@ setup_variables() {
     OS_CA_FILE="${OS_CA_FILE:-}"
     OS_SSL_CERT_VERIFY="${OS_SSL_CERT_VERIFY:-false}"
 
+    DATE_FIELD_KEY="${DATE_FIELD_KEY:-@timestamp}"
+    FILTER_DATE_FROM="${FILTER_DATE_FROM:-}"
+    FILTER_DATE_TO="${FILTER_DATE_TO:-}"
+
     # Define output directory and create it if it doesn't exist
     OUTPUT_DIR="${OUTPUT_DIR:-./output_files}"
     mkdir -p "$OUTPUT_DIR"
@@ -64,7 +73,7 @@ setup_variables() {
     DATAVIEW_DIR="$OUTPUT_DIR/dataviews"
     mkdir -p "$DATAVIEW_DIR"
     DATAVIEW_FILE="$DATAVIEW_DIR/dataviews.json"
-    REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
+    DATAVIEW_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report.csv"
 
     INDICES_DIR="$DATAVIEW_DIR/indices"
     mkdir -p "$INDICES_DIR"
@@ -85,14 +94,14 @@ setup_variables() {
     LOG_FILE="$LOGS_DIR/$(date '+%Y-%m-%d-%H-%M-%S').log"
     CURRENT_LOG_FILE="$LOGS_DIR/current.log"
 
+    REPORT_DIR="$OUTPUT_DIR/report"
+    mkdir -p "$REPORT_DIR"
+
     # Control config cleanup
     CONFIG_CLEANUP="${CONFIG_CLEANUP:-false}"
 
     # Set DEBUG to false by default
     DEBUG="${DEBUG:-false}"
-
-    # Set batch for data migration, 2000 is default
-    BATCH_SIZE="${BATCH_SIZE:-2000}"
 
     # Set concurrency, 2 is default
     CONCURRENCY="${CONCURRENCY:-2}"
@@ -102,6 +111,9 @@ setup_variables() {
 
     # Set indices pattern to exclude, default is none
     EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-}"
+
+    # Logstash pipeline batch size, 500 is default
+    LS_BATCH_SIZE="${LS_BATCH_SIZE:-125}"
 
     # Set default JAVAOPTS
     LS_JAVA_OPTS="${LS_JAVA_OPTS:-}"
@@ -168,6 +180,70 @@ get_master_processes() {
     return 0 # Indicate success
 }
 
+get_indices_detail_by_id() {
+    local uuid=$1
+
+    if [[ -n "$uuid" ]]; then
+        indices_json_file=$(grep -rl --include="*.json" "$uuid" "$INDICES_DIR" | head -n 1)
+        if [[ -f "$indices_json_file" ]]; then
+            # Extract root-level details
+            local sid data_view index_pattern
+            sid=$(jq -r '.sid' "$indices_json_file")
+            data_view=$(jq -r '.["Data View"]' "$indices_json_file")
+            index_pattern=$(jq -r '.["Index Pattern"]' "$indices_json_file")
+
+            # Search for the UUID in the indices array
+            while IFS= read -r index_entry; do
+                indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
+                if [[ "$indices_uuid" == "$uuid" ]]; then
+                    local indices_name health index_status doc_count primary_data_size store_size
+                    indices_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
+                    health=$(echo "$index_entry" | jq -r '.Health')
+                    index_status=$(echo "$index_entry" | jq -r '.["Index Status"]')
+                    doc_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+                    primary_data_size=$(echo "$index_entry" | jq -r '.["Primary Data Size"]')
+                    store_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
+
+                    # Construct raw JSON output
+                    local raw_json
+                    raw_json=$(jq -n --arg sid "$sid" \
+                        --arg data_view "$data_view" \
+                        --arg index_pattern "$index_pattern" \
+                        --arg uuid "$indices_uuid" \
+                        --arg index_name "$indices_name" \
+                        --arg health "$health" \
+                        --arg index_status "$index_status" \
+                        --arg doc_count "$doc_count" \
+                        --arg primary_data_size "$primary_data_size" \
+                        --arg store_size "$store_size" \
+                        '{
+                                          "UUID": $uuid,
+                                          "SID": $sid,
+                                          "Data View": $data_view,
+                                          "Index Pattern": $index_pattern,
+                                          "Index Name": $index_name,
+                                          "Health": $health,
+                                          "Index Status": $index_status,
+                                          "Doc Count": $doc_count,
+                                          "Primary Data Size": $primary_data_size,
+                                          "Store Size": $store_size
+                                      }')
+
+                    # Echo raw JSON
+                    echo "$raw_json"
+                    return 0
+                fi
+            done < <(jq -c '.indices[]' "$indices_json_file")
+        else
+            echo "Error: JSON file for UUID $uuid not found in $INDICES_DIR." >&2
+            return 1
+        fi
+    else
+        echo "Error: UUID is not provided." >&2
+        return 1
+    fi
+}
+
 # Monitoring function
 status() {
     # Temporarily disable `set -e` for this function
@@ -175,7 +251,9 @@ status() {
 
     local LOGSTASH_PIDS
     LOGSTASH_PIDS=$(get_logstash_processes)
-    if [ $? -ne 0 ]; then
+
+    # Check if there are no Logstash processes
+    if [[ -z "$LOGSTASH_PIDS" ]]; then
         echo "No Logstash processes found."
         return
     fi
@@ -197,42 +275,56 @@ status() {
         echo "Data Path: ${PATH_DATA:-Unavailable}"
 
         if [[ -n "$PATH_DATA" ]]; then
-            if [[ ! -f "$INDICES_REPORT_FILE" ]]; then
-                echo "Error: Indices report file not found at $INDICES_REPORT_FILE"
-            else
-                INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
-                INDICES_NAME=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $4}' "$INDICES_REPORT_FILE")
-                INDICES_DOCS=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $5}' "$INDICES_REPORT_FILE")
-                INDICES_SIZE=$(awk -F ',' -v uuid="$INDICES_UUID" '$0 ~ uuid {print $6}' "$INDICES_REPORT_FILE")
-
-                echo "Index Info:"
-                echo "  UUID: $INDICES_UUID"
-                echo "  Name: ${INDICES_NAME:-Unknown}"
-                echo "  Docs: ${INDICES_DOCS:-Unknown}"
-                echo "  Size: ${INDICES_SIZE:-Unknown}"
-            fi
+            INDICES_UUID=$(awk -F '/' '{print $NF}' <<<"$PATH_DATA")
         fi
 
+        if [[ -n "$INDICES_UUID" ]]; then
+            echo "Fetching Index Details for UUID: $INDICES_UUID"
+            indices_details=$(get_indices_detail_by_id "$INDICES_UUID")
+            if [[ -n "$indices_details" ]]; then
+                indices_name=$(echo "$indices_details" | jq -r '.["Index Name"]' 2>/dev/null)
+                indices_docs=$(echo "$indices_details" | jq -r '.["Doc Count"]' 2>/dev/null)
+                indices_size=$(echo "$indices_details" | jq -r '.["Store Size"]' 2>/dev/null)
+            else
+                echo "Failed to fetch index details for UUID: $INDICES_UUID"
+            fi
+        else
+            echo "No UUID found for Logstash PID: $PID"
+        fi
+
+        echo "Index Info:"
+        echo "  UUID:   ${INDICES_UUID}"
+        echo "  Name:   ${indices_name:-Unknown}"
+        echo "  Docs:   ${indices_docs:-Unknown}"
+        echo "  Size:   ${indices_size:-Unknown}"
+
+        # Fetch pipeline stats from Logstash
         ls_endpoint="http://localhost:$PORT"
         PIPELINE_STATE=$(curl -s "$ls_endpoint/_node/stats/pipelines")
-        if [[ -z "$PIPELINE_STATE" ]]; then
-            echo "Error: Unable to fetch pipeline stats from $ls_endpoint"
+        PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
+        PIPELINE_BATCH_SIZE=$(echo "$PIPELINE_STATE" | jq -r .pipeline.batch_size 2>/dev/null)
+        PIPELINE_WORKER=$(echo "$PIPELINE_STATE" | jq -r .pipeline.workers 2>/dev/null)
+        PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
+        PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
+
+        if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
+            PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
         else
-            PIPELINE_STATUS=$(echo "$PIPELINE_STATE" | jq -r .status 2>/dev/null)
-            PIPELINE_DIM=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.duration_in_millis 2>/dev/null)
-            PIPELINE_OUT=$(echo "$PIPELINE_STATE" | jq -r .pipelines.main.events.out 2>/dev/null)
-
-            if [[ -n "$PIPELINE_DIM" && "$PIPELINE_DIM" -gt 0 ]]; then
-                PIPELINE_RATE=$(awk "BEGIN { printf \"%.2f\", $PIPELINE_OUT / ($PIPELINE_DIM / 1000) }")
-            else
-                PIPELINE_RATE=0
-            fi
-
-            echo "Pipeline Info:"
-            echo "  Status: ${PIPELINE_STATUS:-Unavailable}"
-            echo "  Out: ${PIPELINE_OUT:-0} / ${INDICES_DOCS:-0}"
-            echo "  Rate: ${PIPELINE_RATE:-0.00} events/sec"
+            PIPELINE_RATE=0
         fi
+
+        if [[ "${indices_docs:-0}" -eq 0 ]]; then
+            PERCENTAGE=0
+        else
+            PERCENTAGE=$(awk "BEGIN { printf \"%.2f\", ${PIPELINE_OUT:-0} / ${indices_docs:-1} * 100 }")
+        fi
+
+        echo "Pipeline Info:"
+        echo "  Status:     ${PIPELINE_STATUS:-Unavailable}"
+        echo "  Batch Size: ${PIPELINE_BATCH_SIZE:-Unavailable}"
+        echo "  Workers:    ${PIPELINE_WORKER:-Unavailable}"
+        echo "  Out:        ${PIPELINE_OUT:-0} / ${indices_docs:-0} (${PERCENTAGE}%)"
+        echo "  Rate:       ${PIPELINE_RATE:-0.00} events/sec"
 
         sudo /usr/share/logstash/jdk/bin/jstat -gc "$PID" 2>/dev/null |
             awk 'NR > 1 {
@@ -393,8 +485,8 @@ get_dashboards() {
 
         # Export each dashboard to a separate ndjson file
         curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" "$KB_ENDPOINT/api/saved_objects/_export" -H 'kbn-xsrf: true' -H 'Content-Type: application/json' -d '{
-            "objects": [{"type": "dashboard", "id": "'"$id"'"}],
-            "includeReferencesDeep": true
+"objects": [{"type": "dashboard", "id": "'"$id"'"}],
+"includeReferencesDeep": true
         }' >"$dashboard_file"
     done
 
@@ -426,6 +518,34 @@ generate_logstash_config() {
     local sanitized_index=$(sanitize_name "$index")
     local config_file="$LOGSTASH_CONF_DIR/${sanitized_index}.conf"
 
+    # Configure query
+    get_query() {
+        if [[ -z "$FILTER_DATE_FROM" && -z "$FILTER_DATE_TO" ]]; then
+            QUERY='{"query":{"query_string":{"query":"*"}}}'
+        else
+            QUERY="{\"query\":{\"bool\":{\"must\":[{\"query_string\":{\"query\":\"*\"}},{\"range\":{\"$DATE_FIELD_KEY\":{"
+            RANGE_CLAUSES=()
+
+            if [[ -n "$FILTER_DATE_FROM" ]]; then
+                RANGE_CLAUSES+=("\"gte\":\"$FILTER_DATE_FROM\"")
+            fi
+
+            if [[ -n "$FILTER_DATE_TO" ]]; then
+                RANGE_CLAUSES+=("\"lte\":\"$FILTER_DATE_TO\"")
+            fi
+
+            # Join the range clauses with a comma
+            QUERY+=$(
+                IFS=','
+                echo "${RANGE_CLAUSES[*]}"
+            )
+            QUERY+="}}}]}}}"
+        fi
+        echo "$QUERY"
+    }
+
+    local query=$(get_query)
+
     # Generate Logstash configuration for the current data view
     cat <<EOF >"$config_file"
 input {
@@ -435,9 +555,9 @@ input {
         ssl => $ES_SSL
         password => "\${ES_PASSWORD}"
         index => "$index,-.*"
-        query => '{ "query": { "query_string": { "query": "*" } } }'
+        query => '$query'
         scroll => "5m"
-        size => $BATCH_SIZE
+        size => $ES_BATCH_SIZE
         docinfo => true
         docinfo_target => "[@metadata][doc]"
 EOF
@@ -518,8 +638,8 @@ run_logstash() {
 
         # Run Logstash in the background with the unique path.data
         echo "Running Logstash for index $index..."
-        sudo -E /usr/share/logstash/bin/logstash -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
-        pid=$!                                                                                        # Capture the background process's PID
+        sudo -E /usr/share/logstash/bin/logstash -b $LS_BATCH_SIZE -f "$config_file" --path.data="$logstash_data_dir" & # Run in background
+        pid=$!                                                                                                          # Capture the background process's PID
         echo "Logstash for index $index started with PID $pid."
         echo "$pid $uuid" >>"$LOGSTASH_DIR/pids" # Store UUID and PID in pids file
 
@@ -588,8 +708,19 @@ generate_initial_indices_report() {
             continue
         fi
 
-        # Check if the UUID is already in the report file to avoid duplicates
-        if ! grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
+        # Check if the UUID is already in the report file
+        if grep -q "^$uuid," "$INDICES_REPORT_FILE"; then
+            # Extract existing values from the report file
+            existing_line=$(grep "^$uuid," "$INDICES_REPORT_FILE")
+            existing_doc_count=$(echo "$existing_line" | cut -d',' -f5 | xargs)
+
+            # Compare and update if the new doc count is greater
+            if [[ "$doc_count" -gt "$existing_doc_count" ]]; then
+                # Update the line in the report file and set Status to Updated
+                sed -i "s|^$uuid,.*|$uuid, $sid, $index_pattern, $index_name, $doc_count, $primary_size, , $current_time, Updated|" "$INDICES_REPORT_FILE"
+            fi
+        else
+            # Add new entry if UUID is not present
             echo "$uuid, $sid, $index_pattern, $index_name, $doc_count, $primary_size, , $current_time, UnProcessed" >>"$INDICES_REPORT_FILE"
         fi
     done
@@ -605,102 +736,104 @@ fetch_indices() {
     local sid=$(sanitize_name "$id")
     local indices_json_file="$INDICES_DIR/$sid.json"
 
-    echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
+    if [[ ! -f "$indices_json_file" ]]; then
 
-    # Fetch the list of indices and capture the HTTP status code
-    response=$(curl -s -w "%{http_code}" $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" \
-        "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+        echo "Fetching Indices List of data view $title from $ES_ENDPOINT..."
 
-    http_code="${response: -3}"        # Extract last 3 characters as HTTP status code
-    raw_indices_list="${response%???}" # Remove last 3 characters to get the actual response body
+        # Fetch the list of indices and capture the HTTP status code
+        response=$(curl -s -w "%{http_code}" $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" \
+            "$ES_ENDPOINT/_cat/indices/$title?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
 
-    # Check if the HTTP status indicates a failure
-    if [[ "$http_code" -ne 200 ]]; then
-        echo "Error: Failed to fetch indices for data view $title. HTTP Status: $http_code"
+        http_code="${response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${response%???}" # Remove last 3 characters to get the actual response body
 
-        # Check if the error response is valid JSON
-        if echo "$raw_indices_list" | jq . >/dev/null 2>&1; then
-            # If JSON, include it directly in the error field
-            jq -n --arg sid "$sid" \
-                --arg name "$name" \
-                --arg title "$title" \
-                --argjson error "$raw_indices_list" \
-                '{
+        # Check if the HTTP status indicates a failure
+        if [[ "$http_code" -ne 200 ]]; then
+            echo "Error: Failed to fetch indices for data view $title. HTTP Status: $http_code"
+
+            # Check if the error response is valid JSON
+            if echo "$raw_indices_list" | jq . >/dev/null 2>&1; then
+                # If JSON, include it directly in the error field
+                jq -n --arg sid "$sid" \
+                    --arg name "$name" \
+                    --arg title "$title" \
+                    --argjson error "$raw_indices_list" \
+                    '{
                       sid: $sid,
                       "Data View": $name,
                       "Index Pattern": $title,
                       indices: [],
                       error: $error
                   }' >"$indices_json_file"
-        else
-            # If not JSON, treat it as a string
-            jq -n --arg sid "$sid" \
-                --arg name "$name" \
-                --arg title "$title" \
-                --arg error "Failed to fetch indices: HTTP Status $http_code - $raw_indices_list" \
-                '{
+            else
+                # If not JSON, treat it as a string
+                jq -n --arg sid "$sid" \
+                    --arg name "$name" \
+                    --arg title "$title" \
+                    --arg error "Failed to fetch indices: HTTP Status $http_code - $raw_indices_list" \
+                    '{
                       sid: $sid,
                       "Data View": $name,
                       "Index Pattern": $title,
                       indices: [],
                       error: $error
                   }' >"$indices_json_file"
+            fi
+            return
         fi
-        return
-    fi
 
-    # Check if indices were returned (empty response means no indices)
-    if [[ -z "$raw_indices_list" ]]; then
-        echo "No indices found for data view $title. Saving empty indices list to JSON file."
+        # Check if indices were returned (empty response means no indices)
+        if [[ -z "$raw_indices_list" ]]; then
+            echo "No indices found for data view $title. Saving empty indices list to JSON file."
 
-        # Save JSON with empty indices and no error
-        jq -n --arg sid "$sid" \
-            --arg name "$name" \
-            --arg title "$title" \
-            '{
+            # Save JSON with empty indices and no error
+            jq -n --arg sid "$sid" \
+                --arg name "$name" \
+                --arg title "$title" \
+                '{
                   sid: $sid,
                   "Data View": $name,
                   "Index Pattern": $title,
                   indices: []
               }' >"$indices_json_file"
-        return
-    fi
+            return
+        fi
 
-    # Initialize the JSON file structure for successful fetch
-    jq -n --arg sid "$sid" \
-        --arg name "$name" \
-        --arg title "$title" \
-        '{
+        # Initialize the JSON file structure for successful fetch
+        jq -n --arg sid "$sid" \
+            --arg name "$name" \
+            --arg title "$title" \
+            '{
               sid: $sid,
               "Data View": $name,
               "Index Pattern": $title,
               indices: []
           }' >"$indices_json_file"
 
-    # Append each index entry into the JSON structure using jq
-    while IFS= read -r line; do
+        # Append each index entry into the JSON structure using jq
+        while IFS= read -r line; do
 
-        # Check if the line is empty or only contains whitespace
-        [[ -z "$line" ]] && continue
+            # Check if the line is empty or only contains whitespace
+            [[ -z "$line" ]] && continue
 
-        read -ra columns <<<"$line"
-        uuid="${columns[3]}"
-        index_name="${columns[0]}"
-        health="${columns[1]}"
-        index_status="${columns[2]}"
-        doc_count="${columns[6]}"
-        primary_data_size="${columns[9]}"
-        store_size="${columns[8]}"
+            read -ra columns <<<"$line"
+            uuid="${columns[3]}"
+            index_name="${columns[0]}"
+            health="${columns[1]}"
+            index_status="${columns[2]}"
+            doc_count="${columns[6]}"
+            primary_data_size="${columns[9]}"
+            store_size="${columns[8]}"
 
-        # Append index data to the indices array in the JSON file
-        jq --arg uuid "$uuid" \
-            --arg index_name "$index_name" \
-            --arg health "$health" \
-            --arg index_status "$index_status" \
-            --arg doc_count "$doc_count" \
-            --arg primary_data_size "$primary_data_size" \
-            --arg store_size "$store_size" \
-            '.indices += [{
+            # Append index data to the indices array in the JSON file
+            jq --arg uuid "$uuid" \
+                --arg index_name "$index_name" \
+                --arg health "$health" \
+                --arg index_status "$index_status" \
+                --arg doc_count "$doc_count" \
+                --arg primary_data_size "$primary_data_size" \
+                --arg store_size "$store_size" \
+                '.indices += [{
                UUID: $uuid,
                "Index Name": $index_name,
                Health: $health,
@@ -710,12 +843,7 @@ fetch_indices() {
                "Store Size": $store_size
            }]' "$indices_json_file" >tmp.json && mv tmp.json "$indices_json_file"
 
-    done <<<"$raw_indices_list"
-
-    # Generate Initial Indices Report
-    if ! generate_initial_indices_report "$indices_json_file"; then
-        echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
-        exit 1
+        done <<<"$raw_indices_list"
     fi
 
     echo "Indices details for data view $title saved to $indices_json_file"
@@ -730,6 +858,8 @@ fetch_dataviews() {
     if [[ ! -s "$DATAVIEW_FILE" ]]; then
         echo "No data views found or failed to fetch data views. Exiting."
         exit 1
+    else
+        jq -c '.data_view |= sort_by(.id)' "$DATAVIEW_FILE" >"$DATAVIEW_FILE.tmp" && mv "$DATAVIEW_FILE.tmp" "$DATAVIEW_FILE"
     fi
 
     # Output the content for debugging
@@ -741,8 +871,8 @@ fetch_dataviews() {
 # Initialize report file with all data views marked as UnProcessed
 generate_initial_report() {
     # Initialize the report file if it doesn't exist
-    if [[ ! -f "$REPORT_FILE" ]]; then
-        echo "sid, id, Data View, Index Pattern, Status" >"$REPORT_FILE"
+    if [[ ! -f "$DATAVIEW_REPORT_FILE" ]]; then
+        echo "sid, id, Data View, Index Pattern, Status" >"$DATAVIEW_REPORT_FILE"
     fi
 
     # Add all data views to the report with "UnProcessed" status
@@ -751,12 +881,22 @@ generate_initial_report() {
         name=$(echo "$row" | jq -r '.name')
         title=$(echo "$row" | jq -r '.title')
         sid=$(sanitize_name "$id")
-        if ! grep -q "^$sid," "$REPORT_FILE"; then
-            echo "$sid, $id, $name, $title, UnProcessed" >>"$REPORT_FILE"
-
+        if ! grep -q "^$sid," "$DATAVIEW_REPORT_FILE"; then
+            echo "$sid, $id, $name, $title, UnProcessed" >>"$DATAVIEW_REPORT_FILE"
         fi
+
+        indices_json_file="$INDICES_DIR/$sid.json"
         # Fetch Indices List
-        fetch_indices "$id" "$name" "$title"
+        if ! fetch_indices "$id" "$name" "$title"; then
+            echo "Error: Failed to fetch Indices details for data view $title"
+            exit 1
+        else
+            # Generate Initial Indices Report
+            if ! generate_initial_indices_report "$indices_json_file"; then
+                echo "Error: Failed to generate the initial indices report at $INDICES_REPORT_FILE"
+                exit 1
+            fi
+        fi
     done
 }
 
@@ -768,11 +908,25 @@ update_report() {
     local status=$4
     local sid=$(sanitize_name "$id")
 
-    if grep -q "^$sid," "$REPORT_FILE"; then
-        sed -i "s/^$sid,.*/$sid, $id, $name, $index_pattern, $status/" "$REPORT_FILE"
+    if grep -q "^$sid," "$DATAVIEW_REPORT_FILE"; then
+        sed -i "s/^$sid,.*/$sid, $id, $name, $index_pattern, $status/" "$DATAVIEW_REPORT_FILE"
     else
-        echo "$sid, $id, $name, $index_pattern, $status" >>"$REPORT_FILE"
+        echo "$sid, $id, $name, $index_pattern, $status" >>"$DATAVIEW_REPORT_FILE"
     fi
+
+    # Backup strategy: Create backup only if 15 minutes have passed since the last backup
+    BKP_DATAVIEW_REPORT_FILE="$DATAVIEW_DIR/dataviews_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
+    if [[ $(find "$DATAVIEW_DIR" -name "dataviews_migration_report-*.csv" -mmin -15 | wc -l) -eq 0 ]]; then
+        if [[ -f "$DATAVIEW_REPORT_FILE" ]]; then
+            cp "$DATAVIEW_REPORT_FILE" "$BKP_DATAVIEW_REPORT_FILE"
+            cp "$DATAVIEW_REPORT_FILE" "$DATAVIEW_DIR/indices_migration_report-latest.csv"
+            echo "Backup created for Data view Report: $BKP_DATAVIEW_REPORT_FILE"
+        else
+            echo "Error: Data view report file does not exist: $DATAVIEW_REPORT_FILE"
+            exit 1
+        fi
+    fi
+
 }
 
 # Verify if the data view should be processed or skipped
@@ -783,7 +937,7 @@ verify_dataview() {
     local sid=$(sanitize_name "$id")
 
     # Check the report file for the current data view's status
-    local status=$(grep -E "^$sid," "$REPORT_FILE" | cut -d ',' -f5 | tr -d ' ')
+    local status=$(grep -E "^$sid," "$DATAVIEW_REPORT_FILE" | cut -d ',' -f5 | tr -d ' ')
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
@@ -813,8 +967,8 @@ update_indices_report() {
     local uuid="$1"
     local status="$2"
 
-    if [[ -z "$uuid" || -z "$status" || ! -f "$INDICES_REPORT_FILE" ]]; then
-        echo "Error: UUID, status, or report file is missing."
+    if [[ -z "$uuid" || -z "$status" ]]; then
+        echo "Error: UUID or status is missing."
         return 1
     fi
 
@@ -822,23 +976,61 @@ update_indices_report() {
     local current_time
     current_time=$(date +"%Y-%m-%d %H:%M:%S")
 
-    # Update Status, Last Update, and Start Time if empty, based on UUID
-    awk -v uuid="$uuid" -v status="$status" -v current_time="$current_time" '
-        BEGIN { FS = OFS = ", " }                     # Set field separator (FS) and output field separator (OFS) to comma
-        NR == 1 { print; next }                      # Print the header line as is
-        $1 == uuid {                                 # Check if UUID matches
-            $9 = status                              # Update the Status field (7th column)
-            $8 = current_time                        # Always update Last Update field (6th column)
-            if ($7 == "") $7 = current_time          # Update Start Time (5th column) only if it is empty
+    if [[ ! -f "$INDICES_REPORT_FILE" || ! -s "$INDICES_REPORT_FILE" ]]; then
+        echo "Warning: Report file is missing or blank. Generating..."
+        echo "uuid, sid, Index Pattern, Index, Doc Count, Primary Data Size, Start Time, Last Update, Status" >"$INDICES_REPORT_FILE"
+    fi
+
+    # Check if UUID exists in the file
+    if grep -q "^$uuid, " "$INDICES_REPORT_FILE"; then
+        # Update Status, Last Update, and Start Time if empty
+        awk -v uuid="$uuid" -v status="$status" -v current_time="$current_time" '
+        BEGIN { FS = OFS = ", " }
+        NR == 1 { print; next }  # Print the header line
+        $1 == uuid {
+            $9 = status            # Update Status
+            $8 = current_time      # Update Last Update
+            if ($7 == "") $7 = current_time  # Update Start Time only if empty
         }
-        { print }                                    # Print all lines (modified or not)
+        { print }                  # Print all lines
     ' "$INDICES_REPORT_FILE" >tmpfile && mv tmpfile "$INDICES_REPORT_FILE"
+    else
+        indices_details=$(get_indices_detail_by_id "$uuid")
+        if [[ -n "$indices_details" ]]; then
+            sid=$(echo "$indices_details" | jq -r '.SID' 2>/dev/null)
+            index_pattern=$(echo "$indices_details" | jq -r '.SID' 2>/dev/null)
+            index=$(echo "$indices_details" | jq -r '.["Index Name"]' 2>/dev/null)
+            doc_count=$(echo "$indices_details" | jq -r '.["Doc Count"]' 2>/dev/null)
+            primary_data_size=$(echo "$indices_details" | jq -r '.["Store Size"]' 2>/dev/null)
+        else
+            echo "Failed to fetch index details for UUID: $INDICES_UUID"
+        fi
+        echo "$uuid, $sid, $index_pattern, $index, $doc_count, $primary_data_size, $current_time, $current_time, $status" >>"$INDICES_REPORT_FILE"
+    fi
+
+    # Backup Report in every Change
+    BKP_INDICES_REPORT_FILE="$INDICES_DIR/indices_migration_report-$(date '+%Y-%m-%d-%H-%M').csv"
+
+    # Create backup only if 15 minutes have passed since the last backup
+    if [[ $(find "$INDICES_DIR" -name "indices_migration_report-*.csv" -mmin -15 | wc -l) -eq 0 ]]; then
+        # No files created in the last 15 minutes
+        if [[ -f "$INDICES_REPORT_FILE" ]]; then
+            cp "$INDICES_REPORT_FILE" "$BKP_INDICES_REPORT_FILE"
+            cp "$INDICES_REPORT_FILE" "$INDICES_DIR/indices_migration_report-latest.csv"
+            echo "Backup created for Indices: $BKP_INDICES_REPORT_FILE"
+        else
+            echo "Error: Indices report file does not exist: $INDICES_REPORT_FILE"
+            exit 1
+        fi
+    fi
+
 }
 
 # Verify if the data view should be processed or skipped
 verify_indices() {
     local uuid=$1
     local index=$2
+    local indices_list_file=$3
     local original_ifs="$IFS"
     local normalized_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
     IFS=',' read -r -a patterns <<<"$normalized_patterns"
@@ -849,7 +1041,7 @@ verify_indices() {
 
     # If status is "Done" or "Skipped", skip processing
     if [[ "$status" == "Done" || "$status" == "Skipped" ]]; then
-        echo "Indices $index is already processed. Skipping..."
+        echo "Index $index is already processed. Skipping..."
         return 1
     fi
 
@@ -873,6 +1065,63 @@ verify_indices() {
     if ! curl -s $CURL_FLAGS -u "$ES_USERNAME:$ES_PASSWORD" -o /dev/null -w "%{http_code}" "$ES_ENDPOINT/_cat/indices/$index" | grep -q "200"; then
         echo "Index $index does not exist. Skipping this data view."
         update_indices_report "$uuid" "Skipped"
+        return 1
+    fi
+
+    # Check in opensearch if indices already exist
+    match_with_os() {
+        os_response=$(curl -s -w "%{http_code}" --insecure -u "$OS_USERNAME:$OS_PASSWORD" \
+            "$OS_ENDPOINT/_cat/indices/$index?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+
+        http_code="${os_response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${os_response%???}" # Remove last 3 characters to get the actual response body
+
+        # Check if the request was successful
+        if [[ "$http_code" -ne 200 && "$http_code" -ne 404 ]]; then
+            echo "Failed to fetch index information for Opensearch index $index. HTTP code: $http_code"
+            update_indices_report "$uuid" "Failed"
+            return 1
+        fi
+
+        # Extract document count from the response for opensearch
+        if [[ "$http_code" -eq 404 ]]; then
+            echo "Index $index not found in Opensearch. HTTP code: $http_code"
+            os_docs_count=0
+            echo "Opensearch document count for index $index: $os_docs_count"
+        else
+            os_docs_count=$(echo "$raw_indices_list" | awk '{print $7}') # Assuming docs.count is the 7th column
+            if [[ -z "$os_docs_count" ]]; then
+                echo "Document count for index $index is unavailable or empty."
+                update_indices_report "$uuid" "Failed"
+                return 1
+            else
+                echo "Opensearch document count for index $index: $os_docs_count"
+            fi
+        fi
+
+        # Extract document count from elasticsearch
+        es_docs_count=0
+        while IFS= read -r index_entry; do
+            indices_uuid=$(echo "$index_entry" | jq -r '.UUID')
+            indices_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"]')
+
+            if [[ "$indices_uuid" == "$uuid" ]]; then
+                es_docs_count=$indices_docs_count
+                break
+            fi
+        done < <(jq -c '.indices[]' "$indices_list_file") # Process substitution avoids a subshell
+
+        echo "Elasticsearch document count for index $index: $es_docs_count"
+
+        if [[ "$os_docs_count" -ge "$es_docs_count" ]]; then
+            echo "Skipping index $index: OpenSearch docs ($os_docs_count) >= Elasticsearch docs ($es_docs_count)."
+            update_indices_report "$uuid" "Done"
+            return 1
+        fi
+
+    }
+
+    if ! match_with_os; then
         return 1
     fi
 
@@ -915,7 +1164,7 @@ process_dataview() {
         index_status=$(echo "$row" | jq -r '.["Index Status"]')
 
         if [[ "$index_status" == "open" ]]; then
-            if verify_indices "$uuid" "$index"; then
+            if verify_indices "$uuid" "$index" "$indices_list_file"; then
                 # Process the index in the background
                 process_indices "$uuid" "$index" &
 
@@ -941,7 +1190,6 @@ process_dataview() {
     echo "All Logstash processes have completed."
     trap - SIGINT # Reset the trap after processes are complete
 }
-
 migrate() {
     echo "Starting data migration..."
 
@@ -958,22 +1206,173 @@ migrate() {
     # Clean pid file
     >"$LOGSTASH_DIR/pids"
 
+    # Define total instances and current instance ID
+    total_instances="$INSTANCE_COUNT" # Total number of instances
+    instance_id="$INSTANCE_ID"        # Current instance ID
+
+    if [[ -z "$total_instances" || -z "$instance_id" || "$instance_id" -gt "$total_instances" || "$instance_id" -lt 1 ]]; then
+        echo "Invalid input. Please provide valid total_instances and instance_id (1 <= instance_id <= total_instances)."
+        exit 1
+    fi
+
+    # Initialize counter for the data view index
+    counter=0
+
     # Process each data view
     jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
         id=$(echo "$row" | jq -r '.id')
         title=$(echo "$row" | jq -r '.title')
         name=$(echo "$row" | jq -r '.name')
+        assigned_instance_id=$((counter % total_instances + 1))
 
-        if verify_dataview "$id" "$name" "$title"; then
-            update_report "$id" "$name" "$title" "InProgress"
-            if process_dataview "$id" "$name" "$title"; then
-                update_report "$id" "$name" "$title" "Done"
-            else
-                update_report "$id" "$name" "$title" "Failed"
+        # Check if the current index matches the instance number
+        if ((assigned_instance_id == instance_id)); then
+            echo "Instance $instance_id processing data view with ID: $id"
+
+            if verify_dataview "$id" "$name" "$title"; then
+                update_report "$id" "$name" "$title" "InProgress"
+                if process_dataview "$id" "$name" "$title"; then
+                    update_report "$id" "$name" "$title" "Done"
+                else
+                    update_report "$id" "$name" "$title" "Failed"
+                fi
             fi
+        else
+            echo "Skipping data view $title for Instance $assigned_instance_id"
         fi
+
+        # Increment counter to track the current index
+        ((counter++))
     done || exit 1
+
     echo "Data migration complete."
+}
+
+report() {
+    local dataview_report_file="$REPORT_DIR/dataview.csv"
+    local indices_report_file="$REPORT_DIR/indices.csv"
+
+    # Helper function to convert human-readable sizes to bytes
+    convert_to_bytes() {
+        local size_str="$1"
+        local num=$(echo "$size_str" | sed -E 's/[^0-9.]//g')
+        local unit=$(echo "$size_str" | sed -E 's/[0-9.]//g' | tr '[:upper:]' '[:lower:]')
+
+        case "$unit" in
+        kb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024}")" ;;
+        mb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024 * 1024}")" ;;
+        gb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024 * 1024 * 1024}")" ;;
+        tb) echo "$(awk "BEGIN {printf \"%.0f\", $num * 1024 * 1024 * 1024 * 1024}")" ;;
+        *) echo "$num" ;; # Assume bytes if no unit
+        esac
+    }
+
+    # Fetch OS Details
+    get_opensearch_indices_details() {
+        os_response=$(curl -s -w "%{http_code}" --insecure -u "$OS_USERNAME:$OS_PASSWORD" \
+            "$OS_ENDPOINT/_cat/indices?h=index,health,status,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,rep.store.size")
+
+        http_code="${os_response: -3}"        # Extract last 3 characters as HTTP status code
+        raw_indices_list="${os_response%???}" # Remove last 3 characters to get the actual response body
+
+        # Check if the request was successful
+        if [[ "$http_code" -ne 200 && "$http_code" -ne 404 ]]; then
+            echo "Failed to fetch indices information for Opensearch. HTTP code: $http_code"
+            return 1
+        fi
+        echo "$raw_indices_list"
+    }
+
+    # Fetch OpenSearch Indices Details
+    opensearch_indices=$(get_opensearch_indices_details)
+    if [[ -z "$opensearch_indices" ]]; then
+        echo "No OpenSearch indices found or unable to fetch data."
+        return 1
+    fi
+
+    # Fetch Data Views (Assumed to be JSON file with an array)
+    fetch_dataviews || {
+        echo "Error while fetching Data Views"
+        exit 1
+    }
+
+    # Prepare CSV headers
+    echo "DataView_ID, DataView_Name, Title, Total_Document_Count, Total_Index_Count, Total_Storage_Size, Status" >"$dataview_report_file"
+    echo "Index_Uuid, Index_Pattern, Index, Doc_Count, Primary_Data_Size, Status" >"$indices_report_file"
+
+    # Process each DataView and generate reports
+    jq -c '.data_view[]' "$DATAVIEW_FILE" | while read -r row; do
+        id=$(echo "$row" | jq -r '.id')
+        name=$(echo "$row" | jq -r '.name')
+        index_pattern=$(echo "$row" | jq -r '.title')
+        sid=$(sanitize_name "$id")
+
+        indices_json_file="$INDICES_DIR/$sid.json"
+
+        # Fetch indices for data view
+        if ! fetch_indices "$id" "$name" "$index_pattern"; then
+            echo "Error: Failed to fetch Indices details for Data View: $index_pattern"
+            continue
+        fi
+
+        total_docs_count=0
+        total_index_count=0
+        total_storage_size=0
+        data_view_status="Done"
+
+        # Parse indices list and match with the data view
+        while read -r index_entry; do
+            es_index_name=$(echo "$index_entry" | jq -r '.["Index Name"]')
+            es_index_uuid=$(echo "$index_entry" | jq -r '.UUID')
+            es_index_docs_count=$(echo "$index_entry" | jq -r '.["Doc Count"] // 0' | grep -E '^[0-9]+$' || echo 0)
+            es_index_store_size=$(echo "$index_entry" | jq -r '.["Store Size"]')
+
+            # Convert store size to bytes
+            index_store_size_bytes=$(convert_to_bytes "$es_index_store_size")
+
+            # Check for matching index UUID from OpenSearch
+            index_details=$(echo "$opensearch_indices" | grep -w "$es_index_name")
+            if [[ -n "$index_details" ]]; then
+                health=$(echo "$index_details" | awk '{print $2}')
+                status=$(echo "$index_details" | awk '{print $3}')
+                uuid=$(echo "$index_details" | awk '{print $4}')
+                pri=$(echo "$index_details" | awk '{print $5}')
+                rep=$(echo "$index_details" | awk '{print $6}')
+                docs_count=$(echo "$index_details" | awk '{print $7}')
+                docs_deleted=$(echo "$index_details" | awk '{print $8}')
+                pri_store_size=$(echo "$index_details" | awk '{print $9}')
+                rep_store_size=$(echo "$index_details" | awk '{print $10}')
+
+                if [[ $docs_count -lt $es_index_docs_count ]]; then
+                    indices_status="Pending"
+                    data_view_status="Pending"
+                else
+                    indices_status="Done"
+                fi
+
+                # Append per index details to CSV
+                if ! (grep -q "^$es_index_uuid," "$indices_report_file"); then
+                    echo "$es_index_uuid, $index_pattern, $es_index_name, $es_index_docs_count, $es_index_store_size, $indices_status" >>"$indices_report_file"
+                    echo "Appended index: $es_index_name with docs_count: $es_index_docs_count to the indices report."
+                fi
+
+                # Aggregate data for data view summary
+                total_docs_count=$((total_docs_count + es_index_docs_count))
+                total_index_count=$((total_index_count + 1))
+                total_storage_size=$((total_storage_size + index_store_size_bytes))
+            fi
+        done < <(jq -c '.indices[]' "$indices_json_file") # Process substitution
+
+        # Debug: Show the total counts for the data view
+        echo "Data View $index_pattern - Total Docs: $total_docs_count, Total Storage Size: $total_storage_size bytes"
+
+        # Append per data view summary to CSV
+        if ! (grep -q "^$id," "$dataview_report_file"); then
+            echo "$id, $name, $index_pattern, $total_docs_count, $total_index_count, $total_storage_size, $data_view_status" >>"$dataview_report_file"
+        fi
+    done
+
+    echo "Report generated successfully."
 }
 
 # Main function to run the steps in sequence
@@ -1044,6 +1443,9 @@ main() {
         ;;
     stop)
         stop_all_processes
+        ;;
+    report)
+        report
         ;;
     help)
         echo "Usage: $0 [-e <env_file>] [-d] [-f] {setup|migrate|status|getdashboards|logs|stop}"
