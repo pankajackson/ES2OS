@@ -1033,8 +1033,8 @@ verify_indices() {
     local index=$2
     local indices_list_file=$3
     local original_ifs="$IFS"
-    local normalized_exclude_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
-    local normalized_include_patterns=$(echo "$INCLUDE_ONLY_PATTERNS" | tr -s ' ' ',')
+    local normalized_exclude_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',' | sed 's/^,*//;s/,*$//')
+    local normalized_include_patterns=$(echo "$INCLUDE_ONLY_PATTERNS" | tr -s ' ' ',' | sed 's/^,*//;s/,*$//')
     IFS=',' read -r -a exclude_patterns <<<"$normalized_exclude_patterns"
     IFS=',' read -r -a include_patterns <<<"$normalized_include_patterns"
     IFS="$original_ifs" # Restore the original IFS value
@@ -1056,7 +1056,7 @@ verify_indices() {
     fi
 
     # Check if the index matches any include pattern if INCLUDE_ONLY_PATTERNS is not empty
-    if [[ -n "$INCLUDE_ONLY_PATTERNS" ]]; then
+    if [[ -n "$normalized_include_patterns" ]]; then
         local match_found=false
         for pattern in "${include_patterns[@]}"; do
             if [[ "$index" == $pattern ]]; then
