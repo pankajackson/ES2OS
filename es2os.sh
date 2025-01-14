@@ -109,8 +109,9 @@ setup_variables() {
         CONCURRENCY=2
     fi
 
-    # Set indices pattern to exclude, default is none
+    # Set indices pattern to include or exclude, default is none
     EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-}"
+    INCLUDE_ONLY_PATTERNS="${INCLUDE_ONLY_PATTERNS:-}"
 
     # Logstash pipeline batch size, 500 is default
     LS_BATCH_SIZE="${LS_BATCH_SIZE:-125}"
@@ -1032,8 +1033,10 @@ verify_indices() {
     local index=$2
     local indices_list_file=$3
     local original_ifs="$IFS"
-    local normalized_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
-    IFS=',' read -r -a patterns <<<"$normalized_patterns"
+    local normalized_exclude_patterns=$(echo "$EXCLUDE_PATTERNS" | tr -s ' ' ',')
+    local normalized_include_patterns=$(echo "$INCLUDE_ONLY_PATTERNS" | tr -s ' ' ',')
+    IFS=',' read -r -a exclude_patterns <<<"$normalized_exclude_patterns"
+    IFS=',' read -r -a include_patterns <<<"$normalized_include_patterns"
     IFS="$original_ifs" # Restore the original IFS value
 
     # Check the report file for the current data view's status
@@ -1052,8 +1055,24 @@ verify_indices() {
         return 1
     fi
 
+    # Check if the index matches any include pattern if INCLUDE_ONLY_PATTERNS is not empty
+    if [[ -n "$INCLUDE_ONLY_PATTERNS" ]]; then
+        local match_found=false
+        for pattern in "${include_patterns[@]}"; do
+            if [[ "$index" == $pattern ]]; then
+                match_found=true
+                break
+            fi
+        done
+        if ! $match_found; then
+            echo "Index $index does not match any include pattern. Skipping..."
+            update_indices_report "$uuid" "Excluded"
+            return 1
+        fi
+    fi
+
     # Check if the index matches any exclude pattern
-    for pattern in "${patterns[@]}"; do
+    for pattern in "${exclude_patterns[@]}"; do
         if [[ "$index" == $pattern ]]; then
             echo "Excluding index: $index"
             update_indices_report "$uuid" "Excluded"

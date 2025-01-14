@@ -243,6 +243,7 @@ To set up environment-specific values, create an env.sh file in the root directo
 
 - `CONCURRENCY`: Number of parallel Logstash instances to process indices. (default: `4`).
 - `EXCLUDE_PATTERNS`: Comma-separated list of index patterns to exclude from migration (default: `none`).
+- `INCLUDE_ONLY_PATTERNS`: Comma-separated list of index patterns to only include in migration, all other indices will be skipped (default: `none`).
 
 ### Optional Settings
 
@@ -285,6 +286,7 @@ CONCURRENCY=4
 CONFIG_CLEANUP=false
 DEBUG=false
 EXCLUDE_PATTERNS=""
+INCLUDE_ONLY_PATTERNS=""
 LS_BATCH_SIZE=300
 LS_JAVA_OPTS="-Xms3g -Xmx3g"
 
