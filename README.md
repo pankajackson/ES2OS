@@ -25,6 +25,10 @@ A script for migrating data views, dashboards, and indices from Elasticsearch to
     - [Example `env.sh`](#example-envsh)
     - [Other Configurable Settings in `es2os.sh`](#other-configurable-settings-in-es2ossh)
   - [File Structure](#file-structure)
+  - [Utilities](#utilities)
+    - [**Policy Generator**:](#policy-generator)
+      - [Usage](#usage-1)
+      - [Command](#command)
   - [Notes](#notes)
   - [License](#license)
 
@@ -306,6 +310,7 @@ OUTPUT_DIR="./output_files"
 ## File Structure
 
 - `es2os.sh`: Main script for data view migration.
+- `utilities/`: Directory containing utilities.
 - `output_files/`: Directory containing generated files:
   - `dashboards/`: Contains exported dashboards.
     - `dashboards.json`: Fetched dashboards.
@@ -318,6 +323,30 @@ OUTPUT_DIR="./output_files"
   - `logs/`: Directory for storing log files.
     - `current.log`: Tracks the latest migration session in real time.
     - `YYYY-MM-DD-HH-MM-SS.log`: Timestamped logs for each migration session, preserving historical logs.
+
+## Utilities
+
+The **Utilities** contains small programs designed to support and enhance the functionality of this project. These utilities provide specialized features that simplify common tasks, automate processes, and improve the overall user experience.
+
+All utility scripts can be found in the `utilities/` directory of the project. Each script is designed to be modular and can be used independently as needed. Below are the available utilities:
+
+### **Policy Generator**:
+
+The Policy Generator is a utility to create ISM (Index State Management) policies for managing data lifecycles in OpenSearch. It helps define the transitions and actions between different data tiers (hot, warm, cold, and delete), making data lifecycle management easier and more efficient.
+
+#### Usage
+
+Run the script with positional arguments to specify the lifespan of each tier in days:
+
+- **hot_life_span** (required): Number of days data should remain in the hot tier.
+- **warm_life_span** (optional): Number of days data should remain in the warm tier before transitioning to the cold tier.
+- **cold_life_span** (optional): Number of days data should remain in the cold tier before transitioning to the delete state.
+
+#### Command
+
+```bash
+python generate_ism_policy.py <hot_life_span> [warm_life_span] [cold_life_span]
+```
 
 ## Notes
 
@@ -342,3 +371,7 @@ OUTPUT_DIR="./output_files"
 ## License
 
 This project is licensed under the MIT License.
+
+```
+
+```
