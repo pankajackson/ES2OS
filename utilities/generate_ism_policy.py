@@ -59,13 +59,13 @@ class ISMPolicy:
         cold_life_span: int = 0,
         description: str | None = None,
         default_state: str = "hot",
-        indexes: list[str] = [],
+        index_patterns: list[str] = [],
     ) -> None:
         self.default_state = default_state
         self.hot_life_span = hot_life_span
         self.warm_life_span = warm_life_span
         self.cold_life_span = cold_life_span
-        self.indexes = indexes
+        self.index_patterns = index_patterns
         self.delete_after = max(hot_life_span, warm_life_span, cold_life_span)
         self.action_retry = {
             "count": 3,
@@ -146,36 +146,57 @@ class ISMPolicy:
                 default_state=self.default_state,
                 states=self.get_policy_states(),
                 ism_template=(
-                    [self.get_ism_template(self.indexes)] if self.indexes else []
+                    [self.get_ism_template(self.index_patterns)]
+                    if self.index_patterns
+                    else []
                 ),
             )
         )
         return ism_policy
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate an ISM Policy.")
-    parser.add_argument("hot_life_span", type=int, help="Hot tier lifespan in days.")
-    parser.add_argument(
-        "warm_life_span",
-        type=int,
-        nargs="?",
-        default=None,
-        help="Warm tier lifespan in days (optional).",
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate an ISM policy for managing data lifecycle in OpenSearch."
     )
     parser.add_argument(
-        "cold_life_span",
+        "hot_life_span",
         type=int,
-        nargs="?",
-        default=None,
-        help="Cold tier lifespan in days (optional).",
+        help="Number of days data should remain in the hot tier (required).",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--warm-life-span",
+        "-wl",
+        type=int,
+        help="Number of days data should remain in the warm tier (optional).",
+    )
+    parser.add_argument(
+        "--cold-life-span",
+        "-cl",
+        type=int,
+        help="Number of days data should remain in the cold tier (optional).",
+    )
+    parser.add_argument(
+        "index_patterns", nargs="*", help="List of index names to apply the policy."
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_arguments()
+
+    # hot_life_span = args.hot_life_span if args.hot_life_span else args.hot_life_span
+    # if args.hot_life_span:
+    hot_life_span: int = args.hot_life_span
+    warm_life_span: int = args.warm_life_span or 0
+    cold_life_span: int = args.cold_life_span or 0
+    index_patterns: list[str] = args.index_patterns
 
     ism_policy = ISMPolicy(
-        hot_life_span=args.hot_life_span,
-        warm_life_span=args.warm_life_span or 0,
-        cold_life_span=args.cold_life_span or 0,
+        hot_life_span=hot_life_span,
+        warm_life_span=warm_life_span,
+        cold_life_span=cold_life_span,
+        index_patterns=[pattern.strip() for pattern in index_patterns],
     )
     print(json.dumps(asdict(ism_policy.get_policy()), indent=4))
 
