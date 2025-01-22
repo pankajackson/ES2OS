@@ -26,9 +26,10 @@ A script for migrating data views, dashboards, and indices from Elasticsearch to
     - [Other Configurable Settings in `es2os.sh`](#other-configurable-settings-in-es2ossh)
   - [File Structure](#file-structure)
   - [Utilities](#utilities)
-    - [**Policy Generator**:](#policy-generator)
+    - [**Policy Generator**](#policy-generator)
+      - [Overview](#overview)
       - [Usage](#usage-1)
-      - [Command](#command)
+      - [Command Examples](#command-examples)
   - [Notes](#notes)
   - [License](#license)
 
@@ -330,22 +331,51 @@ The **Utilities** contains small programs designed to support and enhance the fu
 
 All utility scripts can be found in the `utilities/` directory of the project. Each script is designed to be modular and can be used independently as needed. Below are the available utilities:
 
-### **Policy Generator**:
+### **Policy Generator**
+
+#### Overview
 
 The Policy Generator is a utility to create ISM (Index State Management) policies for managing data lifecycles in OpenSearch. It helps define the transitions and actions between different data tiers (hot, warm, cold, and delete), making data lifecycle management easier and more efficient.
 
 #### Usage
 
-Run the script with positional arguments to specify the lifespan of each tier in days:
+Run the script with positional and optional arguments to specify the lifespan of each tier in days and to list the indexes:
 
-- **hot_life_span** (required): Number of days data should remain in the hot tier.
-- **warm_life_span** (optional): Number of days data should remain in the warm tier before transitioning to the cold tier.
-- **cold_life_span** (optional): Number of days data should remain in the cold tier before transitioning to the delete state.
+- **`hot_life_span`** (required): Number of days data should remain in the hot tier. This can be provided as the first positional argument.
+- **`--warm-life-span`**, **`-wl`** (optional): Number of days data should remain in the warm tier before transitioning to the cold tier. Defaults to 0 if not provided.
+- **`--cold-life-span`**, **`-cl`** (optional): Number of days data should remain in the cold tier before transitioning to the delete state. Defaults to 0 if not provided.
+- **`index_patterns`**: Additional positional arguments after the lifespan values can be used to specify the list of index names to which the policy should be applied.
 
-#### Command
+#### Command Examples
+
+Using only the mandatory `hot_life_span`:
 
 ```bash
-python generate_ism_policy.py <hot_life_span> [warm_life_span] [cold_life_span]
+python generate_ism_policy.py 7
+```
+
+Specifying the warm and cold lifespans with optional flags:
+
+```bash
+python generate_ism_policy.py 7 --warm-life-span 14 --cold-life-span 30
+```
+
+Adding index_patterns to the policy:
+
+```bash
+python generate_ism_policy.py 7 --warm-life-span 14 --cold-life-span 30 index1 index2 'index_machine_logs*'
+```
+
+Using shorthand flags for warm and cold lifespans:
+
+```bash
+python generate_ism_policy.py 7 -wl 14 -cl 30 index1 'index_machine_logs*' index2
+```
+
+Providing only the hot lifespan and index_patterns:
+
+```bash
+python generate_ism_policy.py 7 index1 'index_machine_logs*'
 ```
 
 ## Notes
