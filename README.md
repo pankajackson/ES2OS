@@ -344,7 +344,7 @@ Run the script with positional and optional arguments to specify the lifespan of
 - **`hot_life_span`** (required): Number of days data should remain in the hot tier. This can be provided as the first positional argument.
 - **`--warm-life-span`**, **`-wl`** (optional): Number of days data should remain in the warm tier before transitioning to the cold tier. Defaults to 0 if not provided.
 - **`--cold-life-span`**, **`-cl`** (optional): Number of days data should remain in the cold tier before transitioning to the delete state. Defaults to 0 if not provided.
-- **`index_patterns`**: Additional positional arguments after the lifespan values can be used to specify the list of index names to which the policy should be applied.
+- **`--index-patterns`**, **`-ip`** (optional): List of index names to which the policy should be applied. If not provided, no index patterns are applied by default.
 
 #### Command Examples
 
@@ -360,22 +360,22 @@ Specifying the warm and cold lifespans with optional flags:
 python generate_ism_policy.py 7 --warm-life-span 14 --cold-life-span 30
 ```
 
-Adding index_patterns to the policy:
+Adding index patterns to the policy:
 
 ```bash
-python generate_ism_policy.py 7 --warm-life-span 14 --cold-life-span 30 index1 index2 'index_machine_logs*'
+python generate_ism_policy.py 7 --warm-life-span 14 --cold-life-span 30 --index-patterns index1 index2 'index_machine_logs*'
 ```
 
 Using shorthand flags for warm and cold lifespans:
 
 ```bash
-python generate_ism_policy.py 7 -wl 14 -cl 30 index1 'index_machine_logs*' index2
+python generate_ism_policy.py 7 -wl 14 -cl 30 -ip index1 'index_machine_logs*' index2
 ```
 
-Providing only the hot lifespan and index_patterns:
+Providing only the hot lifespan and index patterns:
 
 ```bash
-python generate_ism_policy.py 7 index1 'index_machine_logs*'
+python generate_ism_policy.py 7 -ip index1 'index_machine_logs*'
 ```
 
 ## Notes
