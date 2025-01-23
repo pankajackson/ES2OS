@@ -177,7 +177,11 @@ def parse_arguments() -> argparse.Namespace:
         help="Number of days data should remain in the cold tier (optional).",
     )
     parser.add_argument(
-        "index_patterns", nargs="*", help="List of index names to apply the policy."
+        "--index-patterns",
+        "-ip",
+        nargs="*",
+        default=[],
+        help="List of index names/patterns to apply the policy (optional).",
     )
     return parser.parse_args()
 
@@ -185,8 +189,6 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     args = parse_arguments()
 
-    # hot_life_span = args.hot_life_span if args.hot_life_span else args.hot_life_span
-    # if args.hot_life_span:
     hot_life_span: int = args.hot_life_span
     warm_life_span: int = args.warm_life_span or 0
     cold_life_span: int = args.cold_life_span or 0
