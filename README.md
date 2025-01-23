@@ -401,7 +401,3 @@ python generate_ism_policy.py 7 -ip index1 'index_machine_logs*'
 ## License
 
 This project is licensed under the MIT License.
-
-```
-
-```
