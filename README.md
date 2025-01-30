@@ -30,6 +30,10 @@ A script for migrating data views, dashboards, and indices from Elasticsearch to
       - [Overview](#overview)
       - [Usage](#usage-1)
       - [Command Examples](#command-examples)
+    - [**Index Template Generator**](#index-template-generator)
+      - [Overview](#overview-1)
+      - [Usage](#usage-2)
+      - [Command Example](#command-example)
   - [Notes](#notes)
   - [License](#license)
 
@@ -378,6 +382,28 @@ Providing only the hot lifespan and index patterns:
 python generate_ism_policy.py 7 -ip index1 'index_machine_logs*'
 ```
 
+### **Index Template Generator**
+
+#### Overview
+
+The **Index Template Generator** is a utility that generates index templates for Elasticsearch/OpenSearch based on provided shard count, replica count, and index patterns. This helps in automating the creation of index templates for managing your data in Elasticsearch/OpenSearch.
+
+#### Usage
+
+Run the script with the required arguments to generate an index template:
+
+- **`--shard-count`**, **`-sc`**: Specify the number of shards for the index template (default is 2).
+- **`--replica-count`**, **`-rc`**: Specify the number of replicas for the index template (default is 2).
+- **`--index-patterns`**, **`-ip`**: List of index patterns to be included in the template.
+
+#### Command Example
+
+```bash
+python generate_index_template.py -sc 3 -rc 1 -ip index1 index2
+```
+
+This command will generate a template JSON file for Elasticsearch/OpenSearch with the specified shard count, replica count, and index patterns.
+
 ## Notes
 
 - Prerequisites:
@@ -401,7 +427,3 @@ python generate_ism_policy.py 7 -ip index1 'index_machine_logs*'
 ## License
 
 This project is licensed under the MIT License.
-
-```
-
-```
